@@ -8,3 +8,4 @@ azuracast-core = { path = "../core" }
 tokio = { version = "1.0", features = ["full"] }
 axum = "0.7.9"
 serde = { version = "1.0", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }

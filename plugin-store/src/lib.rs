@@ -6,12 +6,15 @@ use axum::{
 use azuracast_core::{Plugin, PluginError};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
+use std::time::Duration;
+
+/// The central GitHub repository URL hosting the official AzuraCast plugin registry.
+/// Station operators will be able to submit PRs to this repository to add their plugins
+/// to the global store without needing a centralized backend database.
+const GITHUB_REGISTRY_URL: &str = "https://raw.githubusercontent.com/azuracast/plugins/main/registry.json";
 
 /// A representation of a plugin available in the store.
-/// In the future, this metadata would be fetched from a central registry,
-/// and the `download_url` would point to a WebAssembly (WASM) module
-/// that our Rust core executes safely in a sandbox.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StorePlugin {
     pub id: String,
     pub name: String,
@@ -19,6 +22,12 @@ pub struct StorePlugin {
     pub version: String,
     pub is_installed: bool,
     pub download_url: Option<String>,
+}
+
+/// A wrapper struct for the JSON array returned by the GitHub raw file.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginRegistry {
+    pub plugins: Vec<StorePlugin>,
 }
 
 /// The main entry point for the Plugin Store manager.
@@ -39,15 +48,15 @@ impl PluginStorePlugin {
 
 impl Plugin for PluginStorePlugin {
     fn name(&self) -> &'static str {
-        "Plugin Store Manager"
+        "GitHub Plugin Store Manager"
     }
 
     fn version(&self) -> &'static str {
-        "0.1.0"
+        "0.2.0"
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
-        println!("Initializing Plugin Store API...");
+        println!("Initializing GitHub-backed Plugin Store API...");
         Ok(())
     }
 
@@ -56,29 +65,40 @@ impl Plugin for PluginStorePlugin {
     }
 }
 
-/// Handler to list plugins available for download from the central registry.
+/// Handler to list plugins dynamically fetched from the global GitHub registry.
 async fn list_available_plugins() -> impl IntoResponse {
-    // Mock data for the storefront.
-    let available = vec![
+    let client = reqwest::Client::builder()
+        // Provide a timeout so a slow connection doesn't lock up the API request
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    // Fetch the raw `registry.json` from the official GitHub repository.
+    match client.get(GITHUB_REGISTRY_URL).send().await {
+        Ok(response) if response.status().is_success() => {
+            // Attempt to parse the JSON into our Rust structs.
+            if let Ok(registry) = response.json::<PluginRegistry>().await {
+                return Json(registry.plugins);
+            }
+        }
+        _ => {} // Fallback on any error (404, network failure, etc.)
+    }
+
+    // Fallback Mock Data:
+    // If the GitHub repository does not exist yet (or the user is offline),
+    // return a basic "Coming Soon" payload so the UI does not break.
+    let fallback = vec![
         StorePlugin {
             id: "azuracast.plugin.chat".to_string(),
             name: "Live WebSockets Chat".to_string(),
-            description: "A highly-concurrent, real-time chat box for your listeners.".to_string(),
+            description: "A highly-concurrent, real-time chat box for your listeners. (Mock - Offline)".to_string(),
             version: "1.0.2".to_string(),
             is_installed: false,
             download_url: Some("https://registry.azuracast.com/plugins/chat.wasm".to_string()),
         },
-        StorePlugin {
-            id: "azuracast.plugin.analytics".to_string(),
-            name: "Advanced Listener Analytics".to_string(),
-            description: "Heatmaps and geographic listener tracking.".to_string(),
-            version: "0.9.1".to_string(),
-            is_installed: false,
-            download_url: Some("https://registry.azuracast.com/plugins/analytics.wasm".to_string()),
-        },
     ];
 
-    Json(available)
+    Json(fallback)
 }
 
 /// Handler to list currently installed and active plugins.
