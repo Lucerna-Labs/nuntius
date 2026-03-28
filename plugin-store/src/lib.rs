@@ -8,17 +8,24 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::time::Duration;
 
-/// The central GitHub repository URL hosting the official Creator Command Center (CCC) plugin registry.
-/// Station operators will be able to submit PRs to this repository to add their plugins
-/// to the global store without needing a centralized backend database.
-const GITHUB_REGISTRY_URL: &str = "https://raw.githubusercontent.com/ccc/plugins/main/registry.json";
+/// The central GitHub repository URL hosting the official 4C Plugin Registry.
+const GITHUB_REGISTRY_URL: &str = "https://raw.githubusercontent.com/lucernamedia/ccc-plugins/main/registry.json";
 
-/// A representation of a plugin available in the store.
+/// The source classification for a plugin.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum PluginCategory {
+    Official,
+    Community,
+}
+
+/// A representation of a plugin available in the 4C Plugin Repository.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StorePlugin {
     pub id: String,
     pub name: String,
     pub description: String,
+    pub author: String,
+    pub category: PluginCategory,
     pub version: String,
     pub is_installed: bool,
     pub download_url: Option<String>,
@@ -48,15 +55,15 @@ impl PluginStorePlugin {
 
 impl Plugin for PluginStorePlugin {
     fn name(&self) -> &'static str {
-        "GitHub Plugin Store Manager"
+        "4C GitHub Plugin Store Manager"
     }
 
     fn version(&self) -> &'static str {
-        "0.2.0"
+        "0.3.0"
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
-        println!("Initializing GitHub-backed Plugin Store API...");
+        println!("Initializing 4C Plugin Store API...");
         Ok(())
     }
 
@@ -84,17 +91,110 @@ async fn list_available_plugins() -> impl IntoResponse {
         _ => {} // Fallback on any error (404, network failure, etc.)
     }
 
-    // Fallback Mock Data:
-    // If the GitHub repository does not exist yet (or the user is offline),
-    // return a basic "Coming Soon" payload so the UI does not break.
+    // Fallback Mock Data representing the full 4C Blueprint ecosystem:
     let fallback = vec![
+        // --- Official Plugins ---
         StorePlugin {
-            id: "ccc.plugin.chat".to_string(),
-            name: "Live WebSockets Chat".to_string(),
-            description: "A highly-concurrent, real-time chat box for your listeners. (Mock - Offline)".to_string(),
-            version: "1.0.2".to_string(),
+            id: "ccc.plugin.blog-static".to_string(),
+            name: "Static Blog Generator".to_string(),
+            description: "High performance static site generator for your station's articles.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
+            version: "1.0.0".to_string(),
             is_installed: false,
-            download_url: Some("https://registry.ccc.com/plugins/chat.wasm".to_string()),
+            download_url: Some("https://registry.lucernamedia.com/plugins/blog.wasm".to_string()),
+        },
+        StorePlugin {
+            id: "ccc.plugin.newsletter-email".to_string(),
+            name: "Newsletter Campaigns".to_string(),
+            description: "Email automation and listener engagement campaigns.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
+            version: "1.0.0".to_string(),
+            is_installed: false,
+            download_url: Some("https://registry.lucernamedia.com/plugins/newsletter.wasm".to_string()),
+        },
+        StorePlugin {
+            id: "ccc.plugin.activitypub".to_string(),
+            name: "Fediverse Microblog".to_string(),
+            description: "GoToSocial-style ActivityPub integration. Turn your command center into a federated node.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
+            version: "1.0.0".to_string(),
+            is_installed: false,
+            download_url: Some("https://registry.lucernamedia.com/plugins/activitypub.wasm".to_string()),
+        },
+        StorePlugin {
+            id: "ccc.plugin.seo-manager".to_string(),
+            name: "SEO Manager".to_string(),
+            description: "Automatic meta tags, sitemaps, and search engine scoring.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
+            version: "1.0.0".to_string(),
+            is_installed: false,
+            download_url: Some("https://registry.lucernamedia.com/plugins/seo.wasm".to_string()),
+        },
+        StorePlugin {
+            id: "ccc.plugin.analytics".to_string(),
+            name: "Analytics Dashboard".to_string(),
+            description: "Detailed listener and viewer statistics, heatmaps, and retention tracking.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
+            version: "1.0.0".to_string(),
+            is_installed: false,
+            download_url: Some("https://registry.lucernamedia.com/plugins/analytics.wasm".to_string()),
+        },
+        StorePlugin {
+            id: "ccc.plugin.theme.dark-matter".to_string(),
+            name: "Theme: Dark Matter".to_string(),
+            description: "A gorgeous, customizable dark UI theme for the Command Center.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
+            version: "1.0.0".to_string(),
+            is_installed: false,
+            download_url: Some("https://registry.lucernamedia.com/plugins/themes/dark-matter.wasm".to_string()),
+        },
+
+        // --- Community Plugins ---
+        StorePlugin {
+            id: "com.community.monetization-patreon".to_string(),
+            name: "Patreon Integration".to_string(),
+            description: "Sync Patreon tiers to unlock premium ad-free streams and content for subscribers.".to_string(),
+            author: "CreatorCommunity".to_string(),
+            category: PluginCategory::Community,
+            version: "0.9.5".to_string(),
+            is_installed: false,
+            download_url: Some("https://github.com/CreatorCommunity/ccc-patreon/releases/download/v0.9.5/plugin.wasm".to_string()),
+        },
+        StorePlugin {
+            id: "com.community.monetization-ads".to_string(),
+            name: "Ad Insertion Manager".to_string(),
+            description: "Dynamic mid-roll ad insertion and sponsorship tracking for podcasts and streams.".to_string(),
+            author: "AudioAdsInc".to_string(),
+            category: PluginCategory::Community,
+            version: "1.1.2".to_string(),
+            is_installed: false,
+            download_url: Some("https://github.com/AudioAdsInc/ccc-ads/releases/download/v1.1.2/plugin.wasm".to_string()),
+        },
+        StorePlugin {
+            id: "com.community.transcription-whisper".to_string(),
+            name: "Whisper Auto-Transcribe".to_string(),
+            description: "Automatically transcribe podcast episodes to text using OpenAI's local Whisper model.".to_string(),
+            author: "AIAudioHackers".to_string(),
+            category: PluginCategory::Community,
+            version: "2.0.0".to_string(),
+            is_installed: false,
+            download_url: Some("https://github.com/AIAudioHackers/ccc-whisper/releases/download/v2.0.0/plugin.wasm".to_string()),
+        },
+        StorePlugin {
+            id: "com.community.backup-s3".to_string(),
+            name: "S3 Cloud Backups".to_string(),
+            description: "Automatically backup your CccDB and media assets to AWS S3, Cloudflare R2, or Backblaze.".to_string(),
+            author: "CloudSafe".to_string(),
+            category: PluginCategory::Community,
+            version: "1.0.4".to_string(),
+            is_installed: false,
+            download_url: Some("https://github.com/CloudSafe/ccc-s3/releases/download/v1.0.4/plugin.wasm".to_string()),
         },
     ];
 
@@ -103,20 +203,33 @@ async fn list_available_plugins() -> impl IntoResponse {
 
 /// Handler to list currently installed and active plugins.
 async fn list_installed_plugins() -> impl IntoResponse {
-    // In a full implementation, this would query the `PluginManager` from the core crate.
     let installed = vec![
         StorePlugin {
-            id: "ccc.plugin.video".to_string(),
-            name: "P2P Video Podcast Publisher".to_string(),
-            description: "Broadcasting video streams over WebRTC to save server bandwidth.".to_string(),
+            id: "ccc.plugin.video-podcast".to_string(),
+            name: "Video Podcast Publisher".to_string(),
+            description: "Broadcasting video streams over P2P WebRTC to drastically save server bandwidth.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
             version: "0.1.0".to_string(),
             is_installed: true,
             download_url: None,
         },
         StorePlugin {
-            id: "ccc.plugin.blog".to_string(),
-            name: "Static Blog".to_string(),
-            description: "A lightweight blog generator for your station.".to_string(),
+            id: "ccc.plugin.voice-podcast".to_string(),
+            name: "Voice Podcast Publisher".to_string(),
+            description: "High-performance audio streaming, recording, and dynamic RSS generation.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
+            version: "0.1.0".to_string(),
+            is_installed: true,
+            download_url: None,
+        },
+        StorePlugin {
+            id: "ccc.plugin.live-radio".to_string(),
+            name: "Live Radio Engine".to_string(),
+            description: "Icecast and HLS native Rust streaming engine.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
             version: "0.1.0".to_string(),
             is_installed: true,
             download_url: None,
