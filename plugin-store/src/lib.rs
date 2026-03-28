@@ -95,6 +95,16 @@ async fn list_available_plugins() -> impl IntoResponse {
     let fallback = vec![
         // --- Official Plugins ---
         StorePlugin {
+            id: "ccc.plugin.call-studio".to_string(),
+            name: "WebRTC Live Call Studio".to_string(),
+            description: "Allows listeners to call into live radio and podcasts directly from their browser via WebRTC.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
+            version: "1.0.0".to_string(),
+            is_installed: false,
+            download_url: Some("https://registry.lucernamedia.com/plugins/call-studio.wasm".to_string()),
+        },
+        StorePlugin {
             id: "ccc.plugin.blog-static".to_string(),
             name: "Static Blog Generator".to_string(),
             description: "High performance static site generator for your station's articles.".to_string(),
