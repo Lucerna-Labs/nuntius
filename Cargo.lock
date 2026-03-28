@@ -138,6 +138,7 @@ version = "0.1.0"
 dependencies = [
  "azuracast-api",
  "azuracast-core",
+ "azuracast-radio-engine",
  "clap",
  "tokio",
 ]
@@ -151,6 +152,14 @@ name = "azuracast-plugin-blog"
 version = "0.1.0"
 dependencies = [
  "azuracast-core",
+]
+
+[[package]]
+name = "azuracast-radio-engine"
+version = "0.1.0"
+dependencies = [
+ "azuracast-core",
+ "tokio",
 ]
 
 [[package]]

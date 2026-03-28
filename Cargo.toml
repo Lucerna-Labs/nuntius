@@ -4,7 +4,7 @@ members = [
     "core",
     "api",
     "cli",
-    "plugin-blog",
+    "plugin-blog", "radio-engine",
 ]
 
 resolver = "2"
