@@ -26,6 +26,16 @@ const PODCASTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("podcas
 /// Value: Episode ID (u64)
 const PODCASTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new("podcasts_chrono");
 
+/// The main table where video podcast metadata is stored.
+/// Key: Video ID (u64)
+/// Value: Serialized VideoPodcast
+const VIDEO_PODCASTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("video_podcasts");
+
+/// The custom index table for quickly querying the latest video podcasts.
+/// Key: Composite string of `[timestamp]_[video_id]`
+/// Value: Video ID (u64)
+const VIDEO_PODCASTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new("video_podcasts_chrono");
+
 /// Example struct for a Blog Post
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlogPost {
@@ -55,6 +65,18 @@ pub struct PodcastEpisode {
     pub publish_date: u64,
 }
 
+/// Example struct for a Video Podcast
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct VideoPodcast {
+    pub id: u64,
+    pub title: String,
+    pub description: String,
+    /// The directory containing the HLS .m3u8 playlist and .ts chunks
+    pub hls_directory: String,
+    /// Unix timestamp of publication
+    pub publish_date: u64,
+}
+
 /// The main Database manager for AzuraCast
 pub struct AzuraDB {
     db: Database,
@@ -73,6 +95,8 @@ impl AzuraDB {
             write_txn.open_table(TRACKS_TABLE)?;
             write_txn.open_table(PODCASTS_TABLE)?;
             write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
+            write_txn.open_table(VIDEO_PODCASTS_TABLE)?;
+            write_txn.open_table(VIDEO_PODCASTS_CHRONO_INDEX)?;
         }
         write_txn.commit()?;
 
@@ -167,6 +191,59 @@ impl AzuraDB {
         if let Some(encoded) = table.get(id)? {
             let episode: PodcastEpisode = bincode::deserialize(encoded.value()).unwrap();
             Ok(Some(episode))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // --- VIDEO PODCASTS ---
+
+    /// Insert a video podcast episode and update the chronological index.
+    pub fn insert_video_podcast(&self, video: &VideoPodcast) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut main_table = write_txn.open_table(VIDEO_PODCASTS_TABLE)?;
+            let mut index_table = write_txn.open_table(VIDEO_PODCASTS_CHRONO_INDEX)?;
+
+            let encoded: Vec<u8> = bincode::serialize(video).unwrap();
+            main_table.insert(video.id, encoded.as_slice())?;
+
+            let chrono_key = format!("{:020}_{}", video.publish_date, video.id);
+            index_table.insert(chrono_key.as_str(), video.id)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Retrieve the `limit` most recent video podcasts using the custom index.
+    pub fn get_latest_video_podcasts(&self, limit: usize) -> Result<Vec<VideoPodcast>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let index_table = read_txn.open_table(VIDEO_PODCASTS_CHRONO_INDEX)?;
+        let main_table = read_txn.open_table(VIDEO_PODCASTS_TABLE)?;
+
+        let mut results = Vec::new();
+
+        for item in index_table.range("0"..="9").unwrap().rev().take(limit) {
+            let (_, video_id) = item.unwrap();
+            let vid_id_val = video_id.value();
+
+            if let Some(encoded) = main_table.get(vid_id_val)? {
+                let video: VideoPodcast = bincode::deserialize(encoded.value()).unwrap();
+                results.push(video);
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Get a single video podcast episode by its ID.
+    pub fn get_video_podcast(&self, id: u64) -> Result<Option<VideoPodcast>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(VIDEO_PODCASTS_TABLE)?;
+
+        if let Some(encoded) = table.get(id)? {
+            let video: VideoPodcast = bincode::deserialize(encoded.value()).unwrap();
+            Ok(Some(video))
         } else {
             Ok(None)
         }

@@ -201,6 +201,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "azuracast-plugin-store"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "azuracast-core",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "azuracast-plugin-video-podcast"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "azuracast-core",
+ "azuracast-database",
+ "serde",
+ "tokio",
+ "tower-http",
+]
+
+[[package]]
 name = "azuracast-radio-engine"
 version = "0.1.0"
 dependencies = [
