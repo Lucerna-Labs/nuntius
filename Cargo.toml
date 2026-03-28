@@ -1,0 +1,10 @@
+[workspace]
+
+members = [
+    "core",
+    "api",
+    "cli",
+    "plugin-blog",
+]
+
+resolver = "2"
