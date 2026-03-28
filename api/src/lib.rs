@@ -6,7 +6,7 @@ use tokio::net::TcpListener;
 
 /// A simple handler for the health check endpoint.
 async fn health_check() -> &'static str {
-    "OK - AzuraCast API is running."
+    "OK - Creator Command Center (CCC) API is running."
 }
 
 /// A simple handler for the version endpoint.

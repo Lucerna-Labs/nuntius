@@ -77,12 +77,12 @@ pub struct VideoPodcast {
     pub publish_date: u64,
 }
 
-/// The main Database manager for AzuraCast
-pub struct AzuraDB {
+/// The main Database manager for Creator Command Center (CCC)
+pub struct CccDB {
     db: Database,
 }
 
-impl AzuraDB {
+impl CccDB {
     /// Initialize the database from a file path.
     pub fn new(path: &str) -> Result<Self, Error> {
         let db = Database::create(path)?;

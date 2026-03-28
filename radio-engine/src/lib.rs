@@ -1,4 +1,4 @@
-use azuracast_core::{Plugin, PluginError};
+use ccc_core::{Plugin, PluginError};
 use clap::ValueEnum;
 use std::any::Any;
 use tokio::net::TcpListener;

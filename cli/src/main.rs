@@ -1,10 +1,10 @@
 use clap::{Parser, Subcommand};
-use azuracast_radio_engine::{RadioEnginePlugin, StreamingProtocol};
+use ccc_radio_engine::{RadioEnginePlugin, StreamingProtocol};
 
-/// AzuraCast Rust Command Line Interface
+/// Creator Command Center (CCC) Rust Command Line Interface
 ///
 /// This CLI is designed for both human operators and LLM agents to easily
-/// manage, configure, and automate the high-performance AzuraCast server.
+/// manage, configure, and automate the high-performance Creator Command Center (CCC) server.
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -45,8 +45,8 @@ async fn main() {
     match &cli.command {
         Some(Commands::Serve { port }) => {
             let addr = format!("0.0.0.0:{}", port);
-            println!("Starting AzuraCast API server on {}...", addr);
-            if let Err(e) = azuracast_api::serve(&addr).await {
+            println!("Starting Creator Command Center (CCC) API server on {}...", addr);
+            if let Err(e) = ccc_api::serve(&addr).await {
                 eprintln!("Failed to start server: {}", e);
             }
         }
@@ -63,7 +63,7 @@ async fn main() {
             println!("No plugins loaded yet.");
         }
         None => {
-            println!("Welcome to AzuraCast Rust CLI.");
+            println!("Welcome to Creator Command Center (CCC) Rust CLI.");
             println!("Use --help for a list of available commands.");
         }
     }

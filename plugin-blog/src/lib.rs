@@ -1,7 +1,7 @@
-use azuracast_core::{Plugin, PluginError};
+use ccc_core::{Plugin, PluginError};
 use std::any::Any;
 
-/// A simple Static Blog plugin for AzuraCast.
+/// A simple Static Blog plugin for Creator Command Center (CCC).
 pub struct StaticBlogPlugin {
     posts: Vec<String>,
 }
@@ -35,7 +35,7 @@ impl Plugin for StaticBlogPlugin {
     fn init(&mut self) -> Result<(), PluginError> {
         println!("Initializing Static Blog Plugin...");
         // Here we could register routes, db tables, or template hooks
-        self.add_post("Welcome to the AzuraCast Rust rewrite!".to_string());
+        self.add_post("Welcome to the Creator Command Center (CCC) Rust rewrite!".to_string());
         Ok(())
     }
 

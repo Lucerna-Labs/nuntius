@@ -3,15 +3,15 @@ use axum::{
     routing::get,
     Router,
 };
-use azuracast_core::{Plugin, PluginError};
+use ccc_core::{Plugin, PluginError};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::time::Duration;
 
-/// The central GitHub repository URL hosting the official AzuraCast plugin registry.
+/// The central GitHub repository URL hosting the official Creator Command Center (CCC) plugin registry.
 /// Station operators will be able to submit PRs to this repository to add their plugins
 /// to the global store without needing a centralized backend database.
-const GITHUB_REGISTRY_URL: &str = "https://raw.githubusercontent.com/azuracast/plugins/main/registry.json";
+const GITHUB_REGISTRY_URL: &str = "https://raw.githubusercontent.com/ccc/plugins/main/registry.json";
 
 /// A representation of a plugin available in the store.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -89,12 +89,12 @@ async fn list_available_plugins() -> impl IntoResponse {
     // return a basic "Coming Soon" payload so the UI does not break.
     let fallback = vec![
         StorePlugin {
-            id: "azuracast.plugin.chat".to_string(),
+            id: "ccc.plugin.chat".to_string(),
             name: "Live WebSockets Chat".to_string(),
             description: "A highly-concurrent, real-time chat box for your listeners. (Mock - Offline)".to_string(),
             version: "1.0.2".to_string(),
             is_installed: false,
-            download_url: Some("https://registry.azuracast.com/plugins/chat.wasm".to_string()),
+            download_url: Some("https://registry.ccc.com/plugins/chat.wasm".to_string()),
         },
     ];
 
@@ -106,7 +106,7 @@ async fn list_installed_plugins() -> impl IntoResponse {
     // In a full implementation, this would query the `PluginManager` from the core crate.
     let installed = vec![
         StorePlugin {
-            id: "azuracast.plugin.video".to_string(),
+            id: "ccc.plugin.video".to_string(),
             name: "P2P Video Podcast Publisher".to_string(),
             description: "Broadcasting video streams over WebRTC to save server bandwidth.".to_string(),
             version: "0.1.0".to_string(),
@@ -114,7 +114,7 @@ async fn list_installed_plugins() -> impl IntoResponse {
             download_url: None,
         },
         StorePlugin {
-            id: "azuracast.plugin.blog".to_string(),
+            id: "ccc.plugin.blog".to_string(),
             name: "Static Blog".to_string(),
             description: "A lightweight blog generator for your station.".to_string(),
             version: "0.1.0".to_string(),

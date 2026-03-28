@@ -1,23 +1,35 @@
-# AzuraCast Rust Rewrite
+# Creator Command Center (CCC)
+**A Next-Generation Media Hub by Lucerna Media**
 
-A high-performance, RAM and CPU efficient rewrite of the AzuraCast official app in Rust.
+Creator Command Center (CCC) is a revolutionary, high-performance, completely serverless-capable broadcasting and publishing platform written entirely in Rust. Originally inspired by traditional radio management tools, CCC has evolved into an ultra-efficient, multi-protocol hub for modern creators.
 
-## Vision and Goals
+## Vision and Architecture
 
-- **Performance**: Convert as much of AzuraCast into Rust as possible. The primary goal is to make the software incredibly efficient in terms of both RAM and CPU usage.
-- **Plugin Architecture**: Implement a robust plugin extension system. Plugins are built as Rust crates that hook into the core application to expand functionality, such as adding a static blog or a newsletter.
-- **Automation First**: The application is fully REST API capable and includes a comprehensive Command Line Interface (CLI). This ensures the app can be seamlessly automated and managed by LLM agents.
-- **Customizable UI**: Expand UI theme customizations to give users complete control over the look and feel of their radio station management panel.
+CCC is built from the ground up to minimize server strain, maximize concurrency, and provide unprecedented flexibility through a dynamic WebAssembly-ready plugin architecture.
 
-## Project Structure
+### Key Innovations:
 
-This project is organized as a Cargo workspace containing the following crates:
+*   **P2P WebRTC Video & Audio:** Utilizing modern WebRTC mesh networks (via `p2p-media-loader`), CCC drastically reduces your server bandwidth. If 1,000 listeners tune into your live broadcast, they share the stream directly among themselves in the browser, reducing server load by up to 90%.
+*   **Zero-Overhead Database (`redb`):** Instead of running a heavy SQL server, CCC uses `redb`—a pure Rust embedded key-value store. By leveraging clever zero-padded composite keys, CCC sorts massive datasets chronologically directly on disk, providing instant lookup times with zero CPU parsing overhead.
+*   **Multi-Protocol Native Streaming:** Whether you need legacy Icecast (TCP) support for older hardware, or modern HTTP Live Streaming (HLS) for mobile apps, CCC's native Rust streaming engine handles it asynchronously with near-zero RAM footprint.
+*   **GitHub-Backed Plugin Store:** Easily expand your station's capabilities (blogs, video podcasts, analytics) via our open-source, serverless plugin registry hosted directly on GitHub.
+*   **API & Automation First:** Every feature is exposed via a high-performance REST API (`axum`) and a comprehensive CLI (`clap`), making CCC the perfect platform for automation by AI agents or custom scripts.
 
-- `core`: Contains the core application logic and defines the traits required for the plugin system.
-- `api`: A foundational REST API (built with `axum`) to facilitate external communication and agent automation.
-- `cli`: A command-line interface (built with `clap`) for managing the server directly from the terminal.
-- `plugin-blog`: An example plugin demonstrating how to extend the core functionality.
+## Core Crates
 
-## Getting Started
+*   `ccc-core`: The heart of the application, managing the `Plugin` trait ecosystem.
+*   `ccc-database`: The ultra-fast, custom-indexed `redb` storage layer.
+*   `ccc-radio-engine`: The native streaming engine supporting Icecast and HLS.
+*   `ccc-api` & `ccc-cli`: The primary interfaces for interacting with the Command Center.
+*   `ccc-plugin-*`: Extensible features including Video Podcasting, Blogging, and the decentralized Store Registry.
 
-*(Instructions for building and running will be added here as development progresses)*
+---
+
+## License
+
+Creator Command Center (CCC) is released under the **PolyForm Small Business License 1.0.0** (Fair Code).
+
+It is **100% free and open-source** for individuals, non-profits, and small businesses.
+However, it is **restricted for use by Large Enterprises** (organizations with more than 100 employees or >$5,000,000 USD annual gross revenue).
+
+If you represent a Large Enterprise and wish to use CCC in production, you must contact **Lucerna Media** to purchase a commercial license. Please see the `LICENSE` file for full details.

@@ -5,8 +5,8 @@ use axum::{
     routing::get,
     Router,
 };
-use azuracast_core::{Plugin, PluginError};
-use azuracast_database::AzuraDB;
+use ccc_core::{Plugin, PluginError};
+use ccc_database::CccDB;
 use rss::{ChannelBuilder, ItemBuilder};
 use std::any::Any;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use axum::body::Body;
 
 /// State shared across the podcast routes.
 struct AppState {
-    db: Arc<AzuraDB>,
+    db: Arc<CccDB>,
 }
 
 /// The main entry point for the Podcast Plugin.
@@ -31,7 +31,7 @@ impl PodcastPlugin {
     }
 
     /// Build the `axum` router for the podcast endpoints.
-    pub fn build_router(db: Arc<AzuraDB>) -> Router {
+    pub fn build_router(db: Arc<CccDB>) -> Router {
         let state = Arc::new(AppState { db });
 
         Router::new()
@@ -78,7 +78,7 @@ async fn rss_feed_handler(State(state): State<Arc<AppState>>) -> impl IntoRespon
     }
 
     let channel = ChannelBuilder::default()
-        .title("AzuraCast High-Performance Podcast")
+        .title("Creator Command Center (CCC) High-Performance Podcast")
         .link("https://radio.example.com")
         .description("A sample podcast generated purely in Rust.")
         .items(items)

@@ -150,95 +150,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "azuracast-api"
-version = "0.1.0"
-dependencies = [
- "axum",
- "tokio",
-]
-
-[[package]]
-name = "azuracast-cli"
-version = "0.1.0"
-dependencies = [
- "azuracast-api",
- "azuracast-core",
- "azuracast-radio-engine",
- "clap",
- "tokio",
-]
-
-[[package]]
-name = "azuracast-core"
-version = "0.1.0"
-dependencies = [
- "azuracast-database",
-]
-
-[[package]]
-name = "azuracast-database"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "redb",
- "serde",
-]
-
-[[package]]
-name = "azuracast-plugin-blog"
-version = "0.1.0"
-dependencies = [
- "azuracast-core",
-]
-
-[[package]]
-name = "azuracast-plugin-podcast"
-version = "0.1.0"
-dependencies = [
- "axum",
- "azuracast-api",
- "azuracast-core",
- "azuracast-database",
- "rss",
- "serde",
- "tokio",
- "tokio-util",
- "tower-http 0.5.2",
-]
-
-[[package]]
-name = "azuracast-plugin-store"
-version = "0.1.0"
-dependencies = [
- "axum",
- "azuracast-core",
- "reqwest",
- "serde",
- "tokio",
-]
-
-[[package]]
-name = "azuracast-plugin-video-podcast"
-version = "0.1.0"
-dependencies = [
- "axum",
- "azuracast-core",
- "azuracast-database",
- "serde",
- "tokio",
- "tower-http 0.5.2",
-]
-
-[[package]]
-name = "azuracast-radio-engine"
-version = "0.1.0"
-dependencies = [
- "azuracast-core",
- "clap",
- "tokio",
-]
-
-[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -279,6 +190,95 @@ checksum = "e1e928d4b69e3077709075a938a05ffbedfa53a84c8f766efbf8220bb1ff60e1"
 dependencies = [
  "find-msvc-tools",
  "shlex",
+]
+
+[[package]]
+name = "ccc-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "tokio",
+]
+
+[[package]]
+name = "ccc-cli"
+version = "0.1.0"
+dependencies = [
+ "ccc-api",
+ "ccc-core",
+ "ccc-radio-engine",
+ "clap",
+ "tokio",
+]
+
+[[package]]
+name = "ccc-core"
+version = "0.1.0"
+dependencies = [
+ "ccc-database",
+]
+
+[[package]]
+name = "ccc-database"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "redb",
+ "serde",
+]
+
+[[package]]
+name = "ccc-plugin-blog"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+]
+
+[[package]]
+name = "ccc-plugin-podcast"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ccc-api",
+ "ccc-core",
+ "ccc-database",
+ "rss",
+ "serde",
+ "tokio",
+ "tokio-util",
+ "tower-http 0.5.2",
+]
+
+[[package]]
+name = "ccc-plugin-store"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ccc-core",
+ "reqwest",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "ccc-plugin-video-podcast"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
+ "tower-http 0.5.2",
+]
+
+[[package]]
+name = "ccc-radio-engine"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "clap",
+ "tokio",
 ]
 
 [[package]]

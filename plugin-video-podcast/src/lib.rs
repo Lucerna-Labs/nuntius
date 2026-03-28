@@ -5,8 +5,8 @@ use axum::{
     routing::get,
     Router,
 };
-use azuracast_core::{Plugin, PluginError};
-use azuracast_database::AzuraDB;
+use ccc_core::{Plugin, PluginError};
+use ccc_database::CccDB;
 use std::any::Any;
 use std::sync::Arc;
 use tower_http::services::ServeDir;
@@ -14,7 +14,7 @@ use tower_http::cors::{Any as CorsAny, CorsLayer};
 
 /// Shared state for the Video Podcast plugin.
 struct AppState {
-    db: Arc<AzuraDB>,
+    db: Arc<CccDB>,
 }
 
 /// The main entry point for the Video Podcast Plugin.
@@ -30,7 +30,7 @@ impl VideoPodcastPlugin {
     }
 
     /// Build the `axum` router for the video podcast endpoints.
-    pub fn build_router(&self, db: Arc<AzuraDB>) -> Router {
+    pub fn build_router(&self, db: Arc<CccDB>) -> Router {
         let state = Arc::new(AppState { db });
 
         // We must allow CORS so the P2P WebRTC WebTorrent trackers and other
@@ -82,14 +82,14 @@ async fn video_player_handler(
 
     // This HTML uses hls.js wrapped with p2p-media-loader-core and p2p-media-loader-hlsjs.
     // It intercepts the HLS segment requests and attempts to fetch them from WebRTC peers first,
-    // drastically reducing strain on this AzuraCast server.
+    // drastically reducing strain on this Creator Command Center (CCC) server.
     let html = format!(
         r#"
         <!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
-            <title>{} - AzuraCast Video</title>
+            <title>{} - Creator Command Center (CCC) Video</title>
             <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
             <script src="https://cdn.jsdelivr.net/npm/p2p-media-loader-core@latest/build/p2p-media-loader-core.min.js"></script>
             <script src="https://cdn.jsdelivr.net/npm/p2p-media-loader-hlsjs@latest/build/p2p-media-loader-hlsjs.min.js"></script>

@@ -1,11 +1,11 @@
 [package]
-name = "azuracast-plugin-video-podcast"
+name = "ccc-plugin-video-podcast"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-azuracast-core = { path = "../core" }
-azuracast-database = { path = "../database" }
+ccc-core = { path = "../core" }
+ccc-database = { path = "../database" }
 tokio = { version = "1.0", features = ["full"] }
 axum = "0.7.9"
 serde = { version = "1.0", features = ["derive"] }

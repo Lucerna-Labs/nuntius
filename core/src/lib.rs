@@ -1,11 +1,11 @@
-//! Core functionality for the AzuraCast Rust rewrite.
+//! Core functionality for the Creator Command Center (CCC) Rust rewrite.
 //!
 //! This crate contains the essential building blocks of the application,
 //! including the plugin architecture, fundamental data structures, and traits.
 
 use std::any::Any;
 
-/// A trait that all plugins must implement to hook into the AzuraCast core.
+/// A trait that all plugins must implement to hook into the Creator Command Center (CCC) core.
 pub trait Plugin: Send + Sync {
     /// Returns the name of the plugin.
     fn name(&self) -> &'static str;

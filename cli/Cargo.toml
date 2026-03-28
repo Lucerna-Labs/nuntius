@@ -1,11 +1,11 @@
 [package]
-name = "azuracast-cli"
+name = "ccc-cli"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.0", features = ["full"] }
-azuracast-api = { path = "../api" }
-azuracast-core = { path = "../core" }
-azuracast-radio-engine = { path = "../radio-engine" }
+ccc-api = { path = "../api" }
+ccc-core = { path = "../core" }
+ccc-radio-engine = { path = "../radio-engine" }
