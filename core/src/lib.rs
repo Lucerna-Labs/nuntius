@@ -3,6 +3,8 @@
 //! This crate contains the essential building blocks of the application,
 //! including the plugin architecture, fundamental data structures, and traits.
 
+pub mod activitypub;
+
 use std::any::Any;
 
 /// A trait that all plugins must implement to hook into the Creator Command Center (CCC) core.

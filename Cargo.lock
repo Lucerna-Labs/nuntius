@@ -215,7 +215,11 @@ dependencies = [
 name = "ccc-core"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "ccc-database",
+ "reqwest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -228,10 +232,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccc-plugin-activitypub"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "ccc-plugin-ads"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "ccc-plugin-analytics"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "ccc-plugin-blog"
 version = "0.1.0"
 dependencies = [
  "ccc-core",
+]
+
+[[package]]
+name = "ccc-plugin-newsletter"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "ccc-plugin-patreon"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -250,12 +304,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccc-plugin-s3"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "ccc-plugin-seo"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "ccc-plugin-store"
 version = "0.1.0"
 dependencies = [
  "axum",
  "ccc-core",
  "reqwest",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "ccc-plugin-theme-dark-matter"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "ccc-database",
  "serde",
  "tokio",
 ]
@@ -270,6 +354,16 @@ dependencies = [
  "serde",
  "tokio",
  "tower-http 0.5.2",
+]
+
+[[package]]
+name = "ccc-plugin-whisper"
+version = "0.1.0"
+dependencies = [
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
 ]
 
 [[package]]
