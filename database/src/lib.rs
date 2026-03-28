@@ -16,6 +16,16 @@ const BLOG_POSTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new
 /// Value: Serialized Track
 const TRACKS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("tracks");
 
+/// The main table where podcast episodes are stored.
+/// Key: Episode ID (u64)
+/// Value: Serialized PodcastEpisode
+const PODCASTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("podcasts");
+
+/// The custom index table for quickly querying the latest podcast episodes.
+/// Key: Composite string of `[timestamp]_[episode_id]`
+/// Value: Episode ID (u64)
+const PODCASTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new("podcasts_chrono");
+
 /// Example struct for a Blog Post
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlogPost {
@@ -34,6 +44,17 @@ pub struct Track {
     pub artist: String,
 }
 
+/// Example struct for a Podcast Episode
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PodcastEpisode {
+    pub id: u64,
+    pub title: String,
+    pub description: String,
+    pub file_path: String,
+    /// Unix timestamp of publication
+    pub publish_date: u64,
+}
+
 /// The main Database manager for AzuraCast
 pub struct AzuraDB {
     db: Database,
@@ -50,6 +71,8 @@ impl AzuraDB {
             write_txn.open_table(BLOG_POSTS_TABLE)?;
             write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
             write_txn.open_table(TRACKS_TABLE)?;
+            write_txn.open_table(PODCASTS_TABLE)?;
+            write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
         }
         write_txn.commit()?;
 
@@ -65,15 +88,9 @@ impl AzuraDB {
             let mut main_table = write_txn.open_table(BLOG_POSTS_TABLE)?;
             let mut index_table = write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
 
-            // Serialize the post
             let encoded: Vec<u8> = bincode::serialize(post).unwrap();
-
-            // 1. Save to main table
             main_table.insert(post.id, encoded.as_slice())?;
 
-            // 2. Save to chronological index.
-            // Format: "0000000000001700000000_1"
-            // We pad the timestamp with zeros so lexicographical sorting works correctly.
             let chrono_key = format!("{:020}_{}", post.timestamp, post.id);
             index_table.insert(chrono_key.as_str(), post.id)?;
         }
@@ -89,8 +106,6 @@ impl AzuraDB {
 
         let mut results = Vec::new();
 
-        // `redb` ranges return values in ascending order by default.
-        // We use `.rev()` to read from the end (newest) backwards.
         for item in index_table.range("0"..="9").unwrap().rev().take(limit) {
             let (_, post_id) = item.unwrap();
             let post_id_val = post_id.value();
@@ -102,6 +117,59 @@ impl AzuraDB {
         }
 
         Ok(results)
+    }
+
+    // --- PODCASTS ---
+
+    /// Insert a podcast episode and update the chronological index.
+    pub fn insert_podcast_episode(&self, episode: &PodcastEpisode) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut main_table = write_txn.open_table(PODCASTS_TABLE)?;
+            let mut index_table = write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
+
+            let encoded: Vec<u8> = bincode::serialize(episode).unwrap();
+            main_table.insert(episode.id, encoded.as_slice())?;
+
+            let chrono_key = format!("{:020}_{}", episode.publish_date, episode.id);
+            index_table.insert(chrono_key.as_str(), episode.id)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Retrieve the `limit` most recent podcast episodes using the custom index.
+    pub fn get_latest_podcast_episodes(&self, limit: usize) -> Result<Vec<PodcastEpisode>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let index_table = read_txn.open_table(PODCASTS_CHRONO_INDEX)?;
+        let main_table = read_txn.open_table(PODCASTS_TABLE)?;
+
+        let mut results = Vec::new();
+
+        for item in index_table.range("0"..="9").unwrap().rev().take(limit) {
+            let (_, episode_id) = item.unwrap();
+            let ep_id_val = episode_id.value();
+
+            if let Some(encoded) = main_table.get(ep_id_val)? {
+                let episode: PodcastEpisode = bincode::deserialize(encoded.value()).unwrap();
+                results.push(episode);
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Get a single podcast episode by its ID.
+    pub fn get_podcast_episode(&self, id: u64) -> Result<Option<PodcastEpisode>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(PODCASTS_TABLE)?;
+
+        if let Some(encoded) = table.get(id)? {
+            let episode: PodcastEpisode = bincode::deserialize(encoded.value()).unwrap();
+            Ok(Some(episode))
+        } else {
+            Ok(None)
+        }
     }
 
     // --- TRACKS ---

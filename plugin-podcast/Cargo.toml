@@ -1,0 +1,15 @@
+[package]
+name = "azuracast-plugin-podcast"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+azuracast-core = { path = "../core" }
+azuracast-database = { path = "../database" }
+azuracast-api = { path = "../api" }
+tokio = { version = "1.0", features = ["full"] }
+axum = "0.7.9"
+rss = "2.0"
+tower-http = { version = "0.5", features = ["fs"] }
+serde = { version = "1.0", features = ["derive"] }
+tokio-util = { version = "0.7.18", features = ["io"] }
