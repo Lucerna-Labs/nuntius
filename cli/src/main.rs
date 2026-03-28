@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use azuracast_radio_engine::RadioEnginePlugin;
+use azuracast_radio_engine::{RadioEnginePlugin, StreamingProtocol};
 
 /// AzuraCast Rust Command Line Interface
 ///
@@ -29,6 +29,10 @@ enum Commands {
         /// The port to run the streaming server on
         #[arg(short, long, default_value_t = 8000)]
         port: u16,
+
+        /// The streaming protocol to use
+        #[arg(long, value_enum, default_value_t = StreamingProtocol::Icecast)]
+        protocol: StreamingProtocol,
     },
     /// List available plugins
     Plugins,
@@ -46,9 +50,9 @@ async fn main() {
                 eprintln!("Failed to start server: {}", e);
             }
         }
-        Some(Commands::Radio { port }) => {
-            println!("Initializing Native Radio Engine on port {}...", port);
-            let plugin = RadioEnginePlugin::new(*port);
+        Some(Commands::Radio { port, protocol }) => {
+            println!("Initializing Native Radio Engine on port {} with protocol {:?}...", port, protocol);
+            let plugin = RadioEnginePlugin::new(*port, protocol.clone());
             if let Err(e) = plugin.run().await {
                 eprintln!("Failed to run radio engine: {}", e);
             }

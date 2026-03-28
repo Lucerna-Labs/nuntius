@@ -159,6 +159,7 @@ name = "azuracast-radio-engine"
 version = "0.1.0"
 dependencies = [
  "azuracast-core",
+ "clap",
  "tokio",
 ]
 
