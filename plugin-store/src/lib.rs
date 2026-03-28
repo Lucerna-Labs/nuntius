@@ -95,6 +95,16 @@ async fn list_available_plugins() -> impl IntoResponse {
     let fallback = vec![
         // --- Official Plugins ---
         StorePlugin {
+            id: "ccc.plugin.drop".to_string(),
+            name: "CCC Drop File Transfer".to_string(),
+            description: "Direct P2P WebRTC data channel file transfer for moving massive media files instantly.".to_string(),
+            author: "Lucerna Media".to_string(),
+            category: PluginCategory::Official,
+            version: "1.0.0".to_string(),
+            is_installed: false,
+            download_url: Some("https://registry.lucernamedia.com/plugins/drop.wasm".to_string()),
+        },
+        StorePlugin {
             id: "ccc.plugin.call-studio".to_string(),
             name: "WebRTC Live Call Studio".to_string(),
             description: "Allows listeners to call into live radio and podcasts directly from their browser via WebRTC.".to_string(),

@@ -280,6 +280,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccc-plugin-drop"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ccc-core",
+ "ccc-database",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "ccc-plugin-newsletter"
 version = "0.1.0"
 dependencies = [
