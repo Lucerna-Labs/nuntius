@@ -1,0 +1,291 @@
+/* Creator Command Center admin shell.
+   Minimal, accessible defaults. Plugins layer their own styles on top. */
+
+:root {
+  --bg: #0e1116;
+  --surface: #161b22;
+  --surface-2: #1f242c;
+  --border: #2a3038;
+  --text: #e6edf3;
+  --text-dim: #9aa4ad;
+  --accent: #5b9eff;
+  --accent-hover: #7fb3ff;
+  --danger-bg: #3a1d1d;
+  --danger-fg: #ff6b6b;
+  --rail-w: 320px;
+  --nav-w: 240px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+/* === Three-column shell === */
+.cms-shell {
+  display: grid;
+  grid-template-columns: var(--nav-w) 1fr var(--rail-w);
+  height: 100vh;
+  width: 100%;
+}
+
+.cms-shell__nav {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 0;
+  overflow-y: auto;
+}
+
+.cms-shell__main {
+  padding: 32px;
+  overflow-y: auto;
+}
+
+.cms-shell__rail {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  padding: 24px;
+  overflow-y: auto;
+}
+
+@media (max-width: 1024px) {
+  .cms-shell {
+    grid-template-columns: var(--nav-w) 1fr;
+  }
+  .cms-shell__rail { display: none; }
+}
+
+@media (max-width: 720px) {
+  .cms-shell {
+    grid-template-columns: 1fr;
+  }
+  .cms-shell__nav { display: none; }
+}
+
+/* === Brand === */
+.cms-brand {
+  padding: 4px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cms-brand__mark {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  font-size: 11px;
+}
+.cms-brand__name {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+/* === Nav items === */
+.cms-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0 12px;
+}
+.cms-nav__item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.cms-nav__item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  text-decoration: none;
+}
+.cms-nav__item--active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.cms-nav__item--bottom {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+/* === Centered card layouts (login/setup) === */
+.cms-centered {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 32px;
+}
+.cms-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  max-width: 420px;
+  width: 100%;
+}
+.cms-card__title {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+.cms-card__lede {
+  margin: 0 0 24px;
+  color: var(--text-dim);
+}
+
+/* === Forms === */
+.cms-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.cms-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cms-field__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cms-field__input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+}
+.cms-field__input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.cms-field__hint {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.cms-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cms-btn--primary {
+  background: var(--accent);
+  color: white;
+}
+.cms-btn--primary:hover {
+  background: var(--accent-hover);
+}
+
+/* === Alerts === */
+.cms-alert {
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.cms-alert--error {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+
+/* === Page headers === */
+.cms-page__header {
+  margin-bottom: 24px;
+}
+.cms-page__header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+.cms-page__lede {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+/* === Dashboard tiles === */
+.cms-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 32px;
+}
+.cms-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text);
+}
+.cms-tile:hover {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  text-decoration: none;
+}
+.cms-tile__icon {
+  font-size: 22px;
+}
+.cms-tile__label {
+  font-weight: 600;
+}
+
+/* === Lists === */
+.cms-section h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cms-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.cms-list__item {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.cms-list__item:last-child { border-bottom: none; }
+
+/* === Right rail === */
+.cms-rail__card h3 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.cms-rail__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cms-rail__list li { padding: 4px 0; }

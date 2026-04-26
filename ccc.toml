@@ -14,16 +14,22 @@ port = 3000
 path = "ccc.redb"
 
 [plugins]
-# A minimal default: just the substantive plugins that actually have logic.
-# Add others (drop, call-studio, store, blog, plus the ccc-plugin-* stubs)
-# when you want them on.
+# Default-on: CMS (so non-technical operators can manage everything)
+# plus the substantive content plugins. Add more as you flesh them out.
 enabled = [
+    "cms",
     "podcast",
     "video-podcast",
 ]
 
 # Per-plugin configuration goes under [plugin.<name>]. Plugins read the
 # subtable they own; everything else is ignored.
+
+[plugin.cms]
+# Sidecar file holding the (argon2) admin password and cookie-signing key.
+# Created automatically on first run; the setup wizard at /admin/setup
+# writes the admin account into it.
+admin_store_path = "admin.toml"
 
 [plugin.video-podcast]
 # Directory that holds the HLS playlists and segments served at /video/hls/*.

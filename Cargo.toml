@@ -4,6 +4,7 @@ members = [
     "core",
     "api",
     "cli",
+    "ccc-cms",
     "plugin-blog", "radio-engine", "database", "plugin-podcast", "plugin-video-podcast", "plugin-store", "ccc-plugin-newsletter", "ccc-plugin-seo", "ccc-plugin-analytics", "ccc-plugin-theme-dark-matter", "ccc-plugin-activitypub", "ccc-plugin-patreon", "ccc-plugin-ads", "ccc-plugin-whisper", "ccc-plugin-s3", "ccc-plugin-call-studio", "ccc-plugin-drop",
 ]
 

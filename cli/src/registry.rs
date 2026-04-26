@@ -18,6 +18,10 @@ pub fn register_by_name(
     _ctx: &AppContext,
 ) -> Result<(), DispatchError> {
     match name {
+        "cms" => {
+            let plugin = ccc_cms::CmsPlugin::from_config(cfg)?;
+            manager.register(plugin)?;
+        }
         "blog" => {
             manager.register(ccc_plugin_blog::StaticBlogPlugin::default())?;
         }
@@ -84,6 +88,7 @@ pub fn register_by_name(
 /// Every identifier `register_by_name` understands. Keep in sync with the match arms above.
 pub fn known_plugins() -> &'static [&'static str] {
     &[
+        "cms",
         "blog",
         "podcast",
         "video-podcast",

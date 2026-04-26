@@ -103,7 +103,19 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
         manager.names()
     );
 
-    let app = ccc_api::app_router(&manager, &ctx);
+    let mut app = ccc_api::app_router(&manager, &ctx);
+
+    // If the CMS plugin is enabled, build the auth-gated admin tree
+    // (CMS handlers + every other plugin's admin_routes) and merge it.
+    // If the CMS is disabled, no /admin surface exists at all — admin
+    // routes from other plugins do not mount.
+    if let Some(cms) = manager.find::<ccc_cms::CmsPlugin>() {
+        let plugin_admin = manager.merged_admin_router(&ctx);
+        let admin_tree = ccc_cms::build_admin_tree(cms.store.clone(), plugin_admin);
+        app = app.merge(admin_tree);
+        println!("CMS enabled at /admin (sidecar: {})", cms.admin_store_path.display());
+    }
+
     if let Err(e) = ccc_api::serve(&addr, app).await {
         eprintln!("Failed to start server: {}", e);
     }

@@ -1,0 +1,33 @@
+{% extends "_layout.html" %}
+
+{% block title %}Sign in — Creator Command Center{% endblock %}
+
+{% block shell %}
+<div class="cms-centered">
+  <div class="cms-card">
+    <h1 class="cms-card__title">Sign in</h1>
+
+    {% match error %}
+      {% when Some with (msg) %}
+        <div class="cms-alert cms-alert--error">{{ msg }}</div>
+      {% when None %}
+    {% endmatch %}
+
+    <form method="post" action="/admin/login" class="cms-form">
+      <label class="cms-field">
+        <span class="cms-field__label">Username</span>
+        <input class="cms-field__input" type="text" name="username" required autofocus
+               autocomplete="username" value="{{ username }}">
+      </label>
+
+      <label class="cms-field">
+        <span class="cms-field__label">Password</span>
+        <input class="cms-field__input" type="password" name="password" required
+               autocomplete="current-password">
+      </label>
+
+      <button class="cms-btn cms-btn--primary" type="submit">Sign in</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -3,9 +3,10 @@
 *.pdb
 .DS_Store
 
-# Runtime artifacts (redb databases, HLS output, etc.)
+# Runtime artifacts (redb databases, HLS output, CMS sidecar, etc.)
 *.redb
 /hls/
+admin.toml
 
 # Local logs from cargo runs we kept while bootstrapping
 cargo-check.log

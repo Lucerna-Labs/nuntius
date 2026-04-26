@@ -1,0 +1,43 @@
+{% extends "_layout.html" %}
+
+{% block title %}Welcome — Creator Command Center{% endblock %}
+
+{% block shell %}
+<div class="cms-centered">
+  <div class="cms-card">
+    <h1 class="cms-card__title">Welcome to Creator Command Center</h1>
+    <p class="cms-card__lede">
+      Let's create your administrator account. You only need to do this once.
+    </p>
+
+    {% match error %}
+      {% when Some with (msg) %}
+        <div class="cms-alert cms-alert--error">{{ msg }}</div>
+      {% when None %}
+    {% endmatch %}
+
+    <form method="post" action="/admin/setup" class="cms-form">
+      <label class="cms-field">
+        <span class="cms-field__label">Username</span>
+        <input class="cms-field__input" type="text" name="username" required autofocus
+               autocomplete="username" minlength="2">
+      </label>
+
+      <label class="cms-field">
+        <span class="cms-field__label">Password</span>
+        <input class="cms-field__input" type="password" name="password" required
+               autocomplete="new-password" minlength="8">
+        <span class="cms-field__hint">At least 8 characters.</span>
+      </label>
+
+      <label class="cms-field">
+        <span class="cms-field__label">Confirm password</span>
+        <input class="cms-field__input" type="password" name="confirm" required
+               autocomplete="new-password" minlength="8">
+      </label>
+
+      <button class="cms-btn cms-btn--primary" type="submit">Create account</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

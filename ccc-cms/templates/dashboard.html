@@ -1,0 +1,48 @@
+{% extends "_layout.html" %}
+
+{% block title %}Dashboard — Creator Command Center{% endblock %}
+
+{% block nav %}
+<a class="cms-nav__item cms-nav__item--active" href="/admin/">Dashboard</a>
+{% for section in nav %}
+  <a class="cms-nav__item" href="{{ section.href }}">{{ section.label }}</a>
+{% endfor %}
+<a class="cms-nav__item cms-nav__item--bottom" href="/admin/logout">Sign out ({{ admin_username }})</a>
+{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Dashboard</h1>
+  <p class="cms-page__lede">
+    Welcome back, {{ admin_username }}. {{ plugin_count }} plugin(s) enabled.
+  </p>
+</header>
+
+<section class="cms-grid">
+  {% for section in nav %}
+    <a class="cms-tile" href="{{ section.href }}">
+      <span class="cms-tile__icon" aria-hidden="true">{{ section.icon }}</span>
+      <span class="cms-tile__label">{{ section.label }}</span>
+    </a>
+  {% endfor %}
+</section>
+
+<section class="cms-section">
+  <h2>Active plugins</h2>
+  <ul class="cms-list">
+    {% for name in plugin_names %}
+      <li class="cms-list__item">{{ name }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Quick links</h3>
+  <ul class="cms-rail__list">
+    <li><a href="/health">API health</a></li>
+    <li><a href="/version">API version</a></li>
+  </ul>
+</div>
+{% endblock %}
