@@ -8,6 +8,8 @@
 /hls/
 admin.toml
 federation.toml
+whisper.toml
+/transcripts/
 
 # Local logs from cargo runs we kept while bootstrapping
 cargo-check.log

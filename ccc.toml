@@ -41,3 +41,9 @@ hls_dir = "./hls"
 # Where the federation actor settings (username, host, bio, public key) live.
 # Created on first boot; edit via /admin/federation in the browser.
 settings_path = "federation.toml"
+
+[plugin.whisper]
+# Whisper transcription settings. The plugin shells out to whatever
+# binary you point it at (OpenAI Python whisper, whisper.cpp, etc.).
+# Edit live via /admin/transcripts/settings.
+settings_path = "whisper.toml"

@@ -310,6 +310,10 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 }
 .cms-badge--draft { background: var(--surface-2); color: var(--text-dim); }
 .cms-badge--published { background: rgba(91, 158, 255, 0.18); color: var(--accent); }
+.cms-badge--queued { background: var(--surface-2); color: var(--text-dim); }
+.cms-badge--running { background: rgba(255, 200, 0, 0.18); color: #ffd166; }
+.cms-badge--completed { background: rgba(91, 158, 255, 0.18); color: var(--accent); }
+.cms-badge--failed { background: var(--danger-bg); color: var(--danger-fg); }
 
 .cms-btn--danger {
   background: var(--danger-bg);

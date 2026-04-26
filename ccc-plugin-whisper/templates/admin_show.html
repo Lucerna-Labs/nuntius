@@ -1,0 +1,48 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Transcript — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Transcript</h1>
+  <p class="cms-page__lede">
+    <span class="cms-badge cms-badge--{{ status_str }}">{{ status_str }}</span>
+    &nbsp;<code>{{ audio_path }}</code>
+  </p>
+</header>
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/transcripts/{{ id }}/transcript" class="cms-form" style="max-width:780px">
+  <label class="cms-field">
+    <span class="cms-field__label">Transcript</span>
+    <textarea class="cms-field__input" name="transcript" rows="20" placeholder="{{ placeholder }}">{{ transcript }}</textarea>
+    <span class="cms-field__hint">Edit freely — saving here overrides whisper's output.</span>
+  </label>
+  <div style="display:flex; gap:8px;">
+    <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+    <a class="cms-btn" href="/admin/transcripts" style="display:inline-flex; align-items:center; padding:10px 16px;">Back</a>
+  </div>
+</form>
+
+<form method="post" action="/admin/transcripts/{{ id }}/requeue" style="margin-top:16px;">
+  <button class="cms-btn" type="submit">Re-run transcription</button>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Job</h3>
+  <ul class="cms-rail__list">
+    <li>Language: <code>{{ language }}</code></li>
+    <li>Model: <code>{{ model }}</code></li>
+    <li>Status: {{ status_str }}</li>
+    <li>Created: {{ created_human }}</li>
+    <li>Updated: {{ updated_human }}</li>
+  </ul>
+</div>
+{% endblock %}

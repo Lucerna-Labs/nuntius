@@ -19,6 +19,12 @@ const BLOG_POSTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new
 /// Slug → ID lookup. Slugs must be unique across all posts (drafts included).
 const BLOG_POSTS_SLUG_INDEX: TableDefinition<&str, u64> = TableDefinition::new("blog_posts_slug");
 
+/// Transcription jobs (Whisper plugin).
+/// Key: Job ID (u64 == unix-second creation time)
+/// Value: Serialized `TranscriptionJob`
+const TRANSCRIPTION_JOBS_TABLE: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("transcription_jobs");
+
 /// The main table where tracks are stored.
 /// Key: Track ID (u64)
 /// Value: Serialized Track
@@ -89,6 +95,48 @@ pub struct BlogPost {
     pub published_at: Option<u64>,
 }
 
+/// Lifecycle of a transcription job.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TranscriptionStatus {
+    #[default]
+    Queued,
+    Running,
+    Completed,
+    Failed,
+}
+
+impl TranscriptionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TranscriptionStatus::Queued => "queued",
+            TranscriptionStatus::Running => "running",
+            TranscriptionStatus::Completed => "completed",
+            TranscriptionStatus::Failed => "failed",
+        }
+    }
+}
+
+/// A transcription job — one audio file → one transcript.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TranscriptionJob {
+    pub id: u64,
+    /// Filesystem path to the audio file the user wants transcribed.
+    pub audio_path: String,
+    pub status: TranscriptionStatus,
+    /// Whisper-style language hint, e.g. "auto", "en". Plugin defaults
+    /// from settings if blank.
+    pub language: String,
+    /// Plugin model name passed to whisper (e.g. "base", "small").
+    pub model: String,
+    /// The latest transcript text. Editable by the operator after the
+    /// job completes — supports manual correction without re-running.
+    pub transcript: Option<String>,
+    /// Set when status == Failed.
+    pub error: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
 /// Example struct for a Radio Track
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Track {
@@ -136,6 +184,7 @@ impl CccDB {
             write_txn.open_table(BLOG_POSTS_TABLE)?;
             write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
             write_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
+            write_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
             write_txn.open_table(TRACKS_TABLE)?;
             write_txn.open_table(PODCASTS_TABLE)?;
             write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
@@ -407,5 +456,59 @@ impl CccDB {
         } else {
             Ok(None)
         }
+    }
+
+    // --- TRANSCRIPTION JOBS ---
+
+    pub fn upsert_transcription_job(&self, job: &TranscriptionJob) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
+            let bytes = bincode::serialize(job).unwrap();
+            table.insert(job.id, bytes.as_slice())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn get_transcription_job(&self, id: u64) -> Result<Option<TranscriptionJob>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
+        Ok(table
+            .get(id)?
+            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+    }
+
+    pub fn delete_transcription_job(&self, id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
+            table.remove(id)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// All jobs sorted newest-first by `updated_at`.
+    pub fn all_transcription_jobs(&self) -> Result<Vec<TranscriptionJob>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
+
+        let mut out: Vec<TranscriptionJob> = table
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
+            .collect();
+        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(out)
+    }
+
+    /// All jobs in `Queued` status — used by the Whisper worker to find work.
+    pub fn queued_transcription_jobs(&self) -> Result<Vec<TranscriptionJob>, Error> {
+        Ok(self
+            .all_transcription_jobs()?
+            .into_iter()
+            .filter(|j| j.status == TranscriptionStatus::Queued)
+            .collect())
     }
 }

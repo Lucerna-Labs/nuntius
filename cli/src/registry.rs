@@ -79,7 +79,8 @@ pub fn register_by_name(
             manager.register(ccc_plugin_theme_dark_matter::CccPluginThemeDarkMatterPlugin)?;
         }
         "whisper" => {
-            manager.register(ccc_plugin_whisper::CccPluginWhisperPlugin)?;
+            let plugin = ccc_plugin_whisper::CccPluginWhisperPlugin::from_config(cfg)?;
+            manager.register(plugin)?;
         }
         other => return Err(DispatchError::Unknown(other.to_string())),
     }

@@ -1,0 +1,46 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Whisper Settings — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Whisper settings</h1>
+  <p class="cms-page__lede">How CCC runs your local whisper binary.</p>
+</header>
+
+{% match saved %}
+  {% when Some with (_) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">Saved.</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/transcripts/settings" class="cms-form" style="max-width:640px">
+  <label class="cms-field">
+    <span class="cms-field__label">Whisper binary</span>
+    <input class="cms-field__input" type="text" name="binary" value="{{ binary }}" required>
+    <span class="cms-field__hint">Either the OpenAI whisper Python CLI (<code>whisper</code>) or whisper.cpp's binary.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Default model</span>
+    <input class="cms-field__input" type="text" name="default_model" value="{{ default_model }}" required>
+    <span class="cms-field__hint"><code>tiny</code>, <code>base</code>, <code>small</code>, <code>medium</code>, <code>large</code>.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Default language</span>
+    <input class="cms-field__input" type="text" name="default_language" value="{{ default_language }}" required>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Output directory</span>
+    <input class="cms-field__input" type="text" name="output_dir" value="{{ output_dir }}" required>
+    <span class="cms-field__hint">Where whisper writes the .txt next to the audio.</span>
+  </label>
+  <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Detected</h3>
+  <p>{% if available %}Whisper binary <strong>found</strong> on PATH.{% else %}<strong>Not found.</strong> Jobs will queue but won't run.{% endif %}</p>
+</div>
+{% endblock %}

@@ -1,0 +1,95 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Transcripts — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Transcripts</h1>
+  <p class="cms-page__lede">{{ jobs.len() }} job(s).</p>
+</header>
+
+{% match status_message %}
+  {% when Some with (msg) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+{% if !whisper_available %}
+<div class="cms-alert" style="background: var(--surface-2); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">
+  <strong>Whisper not detected.</strong> No <code>{{ whisper_binary }}</code> found on PATH.
+  Jobs will queue but won't run. <a href="/admin/transcripts/settings">Configure</a> a different
+  binary or install whisper, then jobs will run automatically.
+</div>
+{% endif %}
+
+<form method="post" action="/admin/transcripts" class="cms-form" style="max-width:640px; margin-bottom: 24px;">
+  <h2 style="margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);">New transcription job</h2>
+  <label class="cms-field">
+    <span class="cms-field__label">Audio file path</span>
+    <input class="cms-field__input" type="text" name="audio_path" required
+           placeholder="/full/path/to/episode.mp3">
+    <span class="cms-field__hint">Absolute path on this server. Upload UI is coming.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Language</span>
+    <input class="cms-field__input" type="text" name="language" value="{{ default_language }}"
+           placeholder="auto, en, es, ...">
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Model</span>
+    <input class="cms-field__input" type="text" name="model" value="{{ default_model }}"
+           placeholder="base, small, medium, large">
+  </label>
+  <button class="cms-btn cms-btn--primary" type="submit">Queue transcription</button>
+</form>
+
+{% if jobs.is_empty() %}
+  <p>No jobs yet.</p>
+{% else %}
+<table class="cms-table">
+  <thead>
+    <tr>
+      <th>Audio</th>
+      <th>Language</th>
+      <th>Model</th>
+      <th>Status</th>
+      <th>Updated</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for j in jobs %}
+    <tr>
+      <td><a href="/admin/transcripts/{{ j.id }}">{{ j.audio_path }}</a></td>
+      <td>{{ j.language }}</td>
+      <td>{{ j.model }}</td>
+      <td><span class="cms-badge cms-badge--{{ j.status_str }}">{{ j.status_str }}</span></td>
+      <td>{{ j.updated_human }}</td>
+      <td>
+        <form method="post" action="/admin/transcripts/{{ j.id }}/delete"
+              onsubmit="return confirm('Delete this transcription job?')" style="display:inline">
+          <button class="cms-btn cms-btn--danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Settings</h3>
+  <p><a href="/admin/transcripts/settings">Configure whisper</a></p>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>How it works</h3>
+  <ol class="cms-rail__list">
+    <li>Drop an audio file on the server.</li>
+    <li>Queue a job with that file's path.</li>
+    <li>The whisper worker picks it up and produces a transcript.</li>
+    <li>Edit the transcript in place if you spot any errors.</li>
+  </ol>
+</div>
+{% endblock %}
