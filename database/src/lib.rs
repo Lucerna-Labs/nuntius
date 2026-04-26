@@ -36,6 +36,12 @@ const NEWSLETTER_EMAIL_INDEX: TableDefinition<&str, u64> =
 /// Ads (Ads plugin).
 const ADS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("ads");
 
+/// Federation followers (ActivityPub plugin).
+/// Key: follower actor URL (e.g. https://mastodon.social/users/alice)
+/// Value: Serialized FederationFollower
+const FEDERATION_FOLLOWERS_TABLE: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("federation_followers");
+
 /// The main table where tracks are stored.
 /// Key: Track ID (u64)
 /// Value: Serialized Track
@@ -169,6 +175,20 @@ pub struct Ad {
     pub updated_at: u64,
 }
 
+/// A remote ActivityPub actor that has followed our station.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FederationFollower {
+    /// Remote actor URL — also the table key.
+    pub actor_url: String,
+    /// Their inbox URL (where we deliver Create Note activities).
+    pub inbox_url: String,
+    /// Optional preferred username for display ("alice").
+    pub preferred_username: Option<String>,
+    /// Optional display name.
+    pub name: Option<String>,
+    pub followed_at: u64,
+}
+
 /// A newsletter subscriber.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Subscriber {
@@ -300,6 +320,7 @@ impl CccDB {
             write_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
             write_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
             write_txn.open_table(ADS_TABLE)?;
+            write_txn.open_table(FEDERATION_FOLLOWERS_TABLE)?;
             write_txn.open_table(TRACKS_TABLE)?;
             write_txn.open_table(PODCASTS_TABLE)?;
             write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
@@ -878,6 +899,41 @@ impl CccDB {
             .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
             .collect();
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(out)
+    }
+
+    // --- FEDERATION FOLLOWERS ---
+
+    pub fn upsert_follower(&self, follower: &FederationFollower) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(FEDERATION_FOLLOWERS_TABLE)?;
+            let bytes = bincode::serialize(follower).unwrap();
+            table.insert(follower.actor_url.as_str(), bytes.as_slice())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_follower(&self, actor_url: &str) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(FEDERATION_FOLLOWERS_TABLE)?;
+            table.remove(actor_url)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn all_followers(&self) -> Result<Vec<FederationFollower>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(FEDERATION_FOLLOWERS_TABLE)?;
+        let mut out: Vec<FederationFollower> = table
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
+            .collect();
+        out.sort_by(|a, b| b.followed_at.cmp(&a.followed_at));
         Ok(out)
     }
 }

@@ -10,11 +10,10 @@
   </p>
 </header>
 
-<div class="cms-alert cms-alert--info" style="background: rgba(91, 158, 255, 0.12); color: var(--text); margin-bottom: 16px; padding: 12px; border-radius: 8px; border: 1px solid var(--accent);">
-  <strong>Preview release.</strong> Your profile and outbox are discoverable.
-  Followers can find you, but they can't subscribe to your posts yet — signed
-  delivery is a follow-up. Discoverability still works (people on Mastodon
-  can search <code>@{{ username }}@{{ host }}</code>).
+<div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--text); margin-bottom: 16px; padding: 12px; border-radius: 8px; border: 1px solid var(--accent);">
+  <strong>{{ follower_count }} follower(s)</strong> across the Fediverse.
+  Posts you publish on the blog or podcast are signed and delivered to
+  every follower's inbox automatically.
 </div>
 
 {% match error %}
