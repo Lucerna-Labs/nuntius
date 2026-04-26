@@ -1,0 +1,80 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Radio — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Radio</h1>
+  <p class="cms-page__lede">Native Icecast-compatible source/listener pump.</p>
+</header>
+
+{% match saved %}
+  {% when Some with (_) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">Saved.</div>
+  {% when None %}
+{% endmatch %}
+
+<section class="cms-grid" style="margin-bottom: 24px;">
+  <div class="cms-tile" style="cursor: default;">
+    <span class="cms-tile__label">Source</span>
+    <span style="font-size: 22px; font-weight: 700;">{% if source_alive %}Connected{% else %}Idle{% endif %}</span>
+  </div>
+  <div class="cms-tile" style="cursor: default;">
+    <span class="cms-tile__label">Listeners</span>
+    <span style="font-size: 28px; font-weight: 700;">{{ listeners }}</span>
+  </div>
+  <div class="cms-tile" style="cursor: default;">
+    <span class="cms-tile__label">Port</span>
+    <span style="font-size: 28px; font-weight: 700;">{{ port }}</span>
+  </div>
+  <div class="cms-tile" style="cursor: default;">
+    <span class="cms-tile__label">Mount</span>
+    <span style="font-size: 18px; font-weight: 700; word-break: break-all;">{{ mount_path }}</span>
+  </div>
+</section>
+
+<form method="post" action="/admin/radio" class="cms-form" style="max-width:640px">
+  <h2 style="margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);">Settings</h2>
+  <label class="cms-field">
+    <span class="cms-field__label">Source password</span>
+    <input class="cms-field__input" type="password" name="source_password" value="{{ source_password }}" required
+           autocomplete="new-password">
+    <span class="cms-field__hint">Username is always <code>source</code>. Configure your streaming software with this password.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Mount point</span>
+    <input class="cms-field__input" type="text" name="mount_path" value="{{ mount_path }}" required
+           pattern="/.+">
+    <span class="cms-field__hint">Begins with <code>/</code>. Listeners hit <code>http://your-host:{{ port }}{{ mount_path }}</code></span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Content type</span>
+    <input class="cms-field__input" type="text" name="content_type" value="{{ content_type }}" required>
+    <span class="cms-field__hint">e.g. <code>audio/mpeg</code> for MP3, <code>application/ogg</code> for Ogg/Opus.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Stream name (icy-name)</span>
+    <input class="cms-field__input" type="text" name="stream_name" value="{{ stream_name }}">
+    <span class="cms-field__hint">Shown by streaming software / players that read ICY headers.</span>
+  </label>
+  <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Streaming software setup</h3>
+  <ul class="cms-rail__list">
+    <li>Server: this host</li>
+    <li>Port: <code>{{ port }}</code></li>
+    <li>Mount: <code>{{ mount_path }}</code></li>
+    <li>User: <code>source</code></li>
+    <li>Password: (the one above)</li>
+    <li>Format: matches Content type</li>
+  </ul>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Listen URL</h3>
+  <p style="font-family:monospace; word-break:break-all;">http://&lt;host&gt;:{{ port }}{{ mount_path }}</p>
+</div>
+{% endblock %}

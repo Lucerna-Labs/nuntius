@@ -22,6 +22,10 @@ pub fn register_by_name(
             let plugin = ccc_cms::CmsPlugin::from_config(cfg)?;
             manager.register(plugin)?;
         }
+        "radio-engine" => {
+            let plugin = ccc_radio_engine::RadioEnginePlugin::from_config(cfg)?;
+            manager.register(plugin)?;
+        }
         "blog" => {
             manager.register(ccc_plugin_blog::StaticBlogPlugin)?;
         }
@@ -95,6 +99,7 @@ pub fn register_by_name(
 pub fn known_plugins() -> &'static [&'static str] {
     &[
         "cms",
+        "radio-engine",
         "blog",
         "podcast",
         "video-podcast",

@@ -639,9 +639,16 @@ dependencies = [
 name = "ccc-radio-engine"
 version = "0.1.0"
 dependencies = [
+ "askama",
+ "askama_axum",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
  "ccc-core",
  "clap",
+ "serde",
  "tokio",
+ "toml",
 ]
 
 [[package]]
