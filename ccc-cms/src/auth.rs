@@ -84,7 +84,11 @@ impl AdminStore {
 
     /// True iff an admin account has been configured (setup complete).
     pub fn is_initialized(&self) -> bool {
-        self.inner.read().expect("admin store poisoned").admin.is_some()
+        self.inner
+            .read()
+            .expect("admin store poisoned")
+            .admin
+            .is_some()
     }
 
     /// Snapshot of the current admin account.

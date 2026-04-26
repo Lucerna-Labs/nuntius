@@ -111,8 +111,8 @@ impl SettingsStore {
     fn persist(&self) -> Result<(), PluginError> {
         let snap = self.snapshot();
         let file = SettingsFile { newsletter: snap };
-        let raw = toml::to_string_pretty(&file)
-            .map_err(|e| PluginError::InitError(e.to_string()))?;
+        let raw =
+            toml::to_string_pretty(&file).map_err(|e| PluginError::InitError(e.to_string()))?;
         if let Some(parent) = self.path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)
@@ -488,8 +488,12 @@ async fn admin_send(State(state): State<AdminState>, Form(form): Form<ComposeFor
     let recipients: Vec<Subscriber> = match state.db.all_subscribers() {
         Ok(v) => v.into_iter().filter(|s| s.active).collect(),
         Err(e) => {
-            return render_compose_error(&state, &form, &format!("Could not load subscribers: {}", e))
-                .await;
+            return render_compose_error(
+                &state,
+                &form,
+                &format!("Could not load subscribers: {}", e),
+            )
+            .await;
         }
     };
     if recipients.is_empty() {
@@ -498,7 +502,9 @@ async fn admin_send(State(state): State<AdminState>, Form(form): Form<ComposeFor
 
     let mailer = match build_mailer(&snap) {
         Ok(m) => m,
-        Err(e) => return render_compose_error(&state, &form, &format!("SMTP setup failed: {}", e)).await,
+        Err(e) => {
+            return render_compose_error(&state, &form, &format!("SMTP setup failed: {}", e)).await
+        }
     };
 
     let from = format!("{} <{}>", snap.from_name, snap.from_email);
@@ -507,8 +513,14 @@ async fn admin_send(State(state): State<AdminState>, Form(form): Form<ComposeFor
 
     for sub in &recipients {
         let msg = Message::builder()
-            .from(match from.parse() { Ok(v) => v, Err(_) => continue })
-            .to(match sub.email.parse() { Ok(v) => v, Err(_) => continue })
+            .from(match from.parse() {
+                Ok(v) => v,
+                Err(_) => continue,
+            })
+            .to(match sub.email.parse() {
+                Ok(v) => v,
+                Err(_) => continue,
+            })
             .subject(&form.subject)
             .header(ContentType::TEXT_PLAIN)
             .body(form.body.clone());
@@ -685,7 +697,11 @@ fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
     }
     let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) { months_leap } else { months_normal };
+    let months = if is_leap(year) {
+        months_leap
+    } else {
+        months_normal
+    };
     let mut month = 1u32;
     for &len in &months {
         if days_remaining < len {

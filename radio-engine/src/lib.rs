@@ -118,8 +118,8 @@ impl SettingsStore {
     fn persist(&self) -> Result<(), PluginError> {
         let snap = self.snapshot();
         let file = SettingsFile { radio: snap };
-        let raw = toml::to_string_pretty(&file)
-            .map_err(|e| PluginError::InitError(e.to_string()))?;
+        let raw =
+            toml::to_string_pretty(&file).map_err(|e| PluginError::InitError(e.to_string()))?;
         if let Some(parent) = self.path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)
@@ -329,9 +329,7 @@ async fn handle_connection(
 
     if is_source {
         if path != snap.mount_path {
-            let _ = sock
-                .write_all(b"HTTP/1.0 404 Not Found\r\n\r\n")
-                .await;
+            let _ = sock.write_all(b"HTTP/1.0 404 Not Found\r\n\r\n").await;
             return Ok(());
         }
         if !auth_ok(&header_text, &snap.source_password) {
@@ -423,9 +421,7 @@ async fn handle_connection(
         let _ = sock.write_all(body.as_bytes()).await;
         Ok(())
     } else {
-        let _ = sock
-            .write_all(b"HTTP/1.0 404 Not Found\r\n\r\n")
-            .await;
+        let _ = sock.write_all(b"HTTP/1.0 404 Not Found\r\n\r\n").await;
         Ok(())
     }
 }

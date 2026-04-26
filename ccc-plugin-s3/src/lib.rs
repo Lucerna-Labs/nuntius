@@ -88,8 +88,8 @@ impl SettingsStore {
     fn persist(&self) -> Result<(), PluginError> {
         let snap = self.snapshot();
         let file = SettingsFile { s3: snap };
-        let raw = toml::to_string_pretty(&file)
-            .map_err(|e| PluginError::InitError(e.to_string()))?;
+        let raw =
+            toml::to_string_pretty(&file).map_err(|e| PluginError::InitError(e.to_string()))?;
         if let Some(parent) = self.path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)

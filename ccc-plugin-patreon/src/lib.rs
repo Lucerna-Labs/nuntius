@@ -81,9 +81,8 @@ impl SettingsStore {
             rand::thread_rng().fill_bytes(&mut bytes);
             p.cookie_key_hex = hex_encode(&bytes);
         }
-        let cookie_key = hex_decode(&p.cookie_key_hex).ok_or_else(|| {
-            PluginError::InitError("patreon cookie_key_hex invalid".into())
-        })?;
+        let cookie_key = hex_decode(&p.cookie_key_hex)
+            .ok_or_else(|| PluginError::InitError("patreon cookie_key_hex invalid".into()))?;
         let store = Self {
             path: path.to_path_buf(),
             inner: RwLock::new(p),
@@ -110,8 +109,8 @@ impl SettingsStore {
     fn persist(&self) -> Result<(), PluginError> {
         let snap = self.snapshot();
         let file = SettingsFile { patreon: snap };
-        let raw = toml::to_string_pretty(&file)
-            .map_err(|e| PluginError::InitError(e.to_string()))?;
+        let raw =
+            toml::to_string_pretty(&file).map_err(|e| PluginError::InitError(e.to_string()))?;
         if let Some(parent) = self.path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)
@@ -383,7 +382,10 @@ async fn public_callback(
         Err(e) => return error_page(&format!("Identity JSON parse failed: {}", e)),
     };
 
-    let patron_id = identity_json["data"]["id"].as_str().unwrap_or("").to_string();
+    let patron_id = identity_json["data"]["id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let full_name = identity_json["data"]["attributes"]["full_name"]
         .as_str()
         .unwrap_or("")
@@ -432,8 +434,8 @@ fn membership_check(identity: &serde_json::Value, required_tier: &str) -> bool {
         {
             active_member = true;
             if !required_tier.is_empty() {
-                if let Some(tiers) = item["relationships"]["currently_entitled_tiers"]["data"]
-                    .as_array()
+                if let Some(tiers) =
+                    item["relationships"]["currently_entitled_tiers"]["data"].as_array()
                 {
                     for tier in tiers {
                         if tier["id"].as_str() == Some(required_tier) {

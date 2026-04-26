@@ -24,10 +24,8 @@ pub const SESSION_COOKIE: &str = "ccc_session";
 /// Accepts both the full `/admin/...` form and the prefix-stripped form
 /// that axum's `nest("/admin", ...)` shows to the inner middleware.
 fn is_unauthenticated_path(path: &str) -> bool {
-    matches!(
-        path,
-        "/admin/setup" | "/admin/login" | "/setup" | "/login"
-    ) || path.starts_with("/admin/static/")
+    matches!(path, "/admin/setup" | "/admin/login" | "/setup" | "/login")
+        || path.starts_with("/admin/static/")
         || path.starts_with("/static/")
 }
 

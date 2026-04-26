@@ -228,7 +228,9 @@ impl PluginManager {
     /// CMS plugin's admin token) without round-tripping through config or
     /// shared globals.
     pub fn find<P: Plugin + 'static>(&self) -> Option<&P> {
-        self.plugins.iter().find_map(|p| p.as_any().downcast_ref::<P>())
+        self.plugins
+            .iter()
+            .find_map(|p| p.as_any().downcast_ref::<P>())
     }
 }
 

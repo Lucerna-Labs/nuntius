@@ -9,7 +9,8 @@ use std::any::Any;
 use std::time::Duration;
 
 /// The central GitHub repository URL hosting the official 4C Plugin Registry.
-const GITHUB_REGISTRY_URL: &str = "https://raw.githubusercontent.com/lucernamedia/ccc-plugins/main/registry.json";
+const GITHUB_REGISTRY_URL: &str =
+    "https://raw.githubusercontent.com/lucernamedia/ccc-plugins/main/registry.json";
 
 /// The source classification for a plugin.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -232,7 +233,9 @@ async fn list_installed_plugins() -> impl IntoResponse {
         StorePlugin {
             id: "ccc.plugin.video-podcast".to_string(),
             name: "Video Podcast Publisher".to_string(),
-            description: "Broadcasting video streams over P2P WebRTC to drastically save server bandwidth.".to_string(),
+            description:
+                "Broadcasting video streams over P2P WebRTC to drastically save server bandwidth."
+                    .to_string(),
             author: "Lucerna Media".to_string(),
             category: PluginCategory::Official,
             version: "0.1.0".to_string(),
@@ -242,7 +245,8 @@ async fn list_installed_plugins() -> impl IntoResponse {
         StorePlugin {
             id: "ccc.plugin.voice-podcast".to_string(),
             name: "Voice Podcast Publisher".to_string(),
-            description: "High-performance audio streaming, recording, and dynamic RSS generation.".to_string(),
+            description: "High-performance audio streaming, recording, and dynamic RSS generation."
+                .to_string(),
             author: "Lucerna Media".to_string(),
             category: PluginCategory::Official,
             version: "0.1.0".to_string(),

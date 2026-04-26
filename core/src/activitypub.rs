@@ -89,8 +89,8 @@ pub struct Activity {
 // ============================================================================
 use axum::{
     extract::Query,
-    response::{IntoResponse, Json},
     http::StatusCode,
+    response::{IntoResponse, Json},
 };
 use std::collections::HashMap;
 
@@ -105,16 +105,12 @@ pub async fn webfinger_handler(Query(params): Query<HashMap<String, String>>) ->
     // Here we provide the static stub format pointing to our Actor profile.
     let response = WebFingerResponse {
         subject: resource.to_string(),
-        aliases: vec![
-            "https://ccc.example.com/users/station".to_string(),
-        ],
-        links: vec![
-            WebFingerLink {
-                rel: "self".to_string(),
-                link_type: Some("application/activity+json".to_string()),
-                href: "https://ccc.example.com/users/station".to_string(),
-            }
-        ],
+        aliases: vec!["https://ccc.example.com/users/station".to_string()],
+        links: vec![WebFingerLink {
+            rel: "self".to_string(),
+            link_type: Some("application/activity+json".to_string()),
+            href: "https://ccc.example.com/users/station".to_string(),
+        }],
     };
 
     (StatusCode::OK, Json(response)).into_response()
@@ -147,9 +143,13 @@ pub async fn actor_profile_handler() -> impl IntoResponse {
     };
 
     (
-        [(axum::http::header::CONTENT_TYPE, "application/activity+json; charset=utf-8")],
-        Json(actor)
-    ).into_response()
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/activity+json; charset=utf-8",
+        )],
+        Json(actor),
+    )
+        .into_response()
 }
 
 /// The Inbox receives activities (like Follow requests) from other federated servers.

@@ -71,7 +71,10 @@ async fn sdp_offer_handler(Json(offer): Json<SdpMessage>) -> impl IntoResponse {
     // 3. Set the remote description.
     // 4. Generate and return a local SDP answer.
 
-    println!("Received WebRTC SDP Offer from caller: {:?}", offer.sdp_type);
+    println!(
+        "Received WebRTC SDP Offer from caller: {:?}",
+        offer.sdp_type
+    );
 
     let mock_answer = SdpMessage {
         sdp_type: "answer".to_string(),
@@ -84,7 +87,10 @@ async fn sdp_offer_handler(Json(offer): Json<SdpMessage>) -> impl IntoResponse {
 /// Handler to receive ICE candidates from the caller to establish the connection through NAT/Firewalls.
 async fn ice_candidate_handler(Json(candidate): Json<IceCandidate>) -> impl IntoResponse {
     // We would pass this candidate to our `webrtc.rs` PeerConnection to establish the audio link.
-    println!("Received WebRTC ICE Candidate from caller: {:?}", candidate.candidate);
+    println!(
+        "Received WebRTC ICE Candidate from caller: {:?}",
+        candidate.candidate
+    );
 
     axum::http::StatusCode::OK
 }

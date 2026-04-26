@@ -14,7 +14,8 @@ const BLOG_POSTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("blog
 /// so the public reader doesn't leak unpublished work).
 /// Key: `[zero-padded published_at]_[post_id]`
 /// Value: Post ID (u64)
-const BLOG_POSTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new("blog_posts_chrono");
+const BLOG_POSTS_CHRONO_INDEX: TableDefinition<&str, u64> =
+    TableDefinition::new("blog_posts_chrono");
 
 /// Slug → ID lookup. Slugs must be unique across all posts (drafts included).
 const BLOG_POSTS_SLUG_INDEX: TableDefinition<&str, u64> = TableDefinition::new("blog_posts_slug");
@@ -53,8 +54,7 @@ const PODCASTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("podcas
 const PODCASTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new("podcasts_chrono");
 
 /// Slug → episode-id lookup. Slugs unique across drafts + published.
-const PODCASTS_SLUG_INDEX: TableDefinition<&str, u64> =
-    TableDefinition::new("podcasts_slug_index");
+const PODCASTS_SLUG_INDEX: TableDefinition<&str, u64> = TableDefinition::new("podcasts_slug_index");
 
 /// The main table where video podcast metadata is stored.
 /// Key: Video ID (u64)
@@ -392,7 +392,9 @@ impl CccDB {
     pub fn get_blog_post(&self, id: u64) -> Result<Option<BlogPost>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(BLOG_POSTS_TABLE)?;
-        Ok(table.get(id)?.map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        Ok(table
+            .get(id)?
+            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
     }
 
     /// Single post by slug.
@@ -547,10 +549,7 @@ impl CccDB {
             .map(|raw| bincode::deserialize(raw.value()).unwrap()))
     }
 
-    pub fn get_podcast_episode_by_slug(
-        &self,
-        slug: &str,
-    ) -> Result<Option<PodcastEpisode>, Error> {
+    pub fn get_podcast_episode_by_slug(&self, slug: &str) -> Result<Option<PodcastEpisode>, Error> {
         let read_txn = self.db.begin_read()?;
         let slug_table = read_txn.open_table(PODCASTS_SLUG_INDEX)?;
         let main = read_txn.open_table(PODCASTS_TABLE)?;

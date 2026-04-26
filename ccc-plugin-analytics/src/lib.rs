@@ -49,7 +49,12 @@ impl EventBuffer {
     }
 
     fn snapshot(&self) -> Vec<RequestEvent> {
-        self.events.read().expect("poisoned").iter().cloned().collect()
+        self.events
+            .read()
+            .expect("poisoned")
+            .iter()
+            .cloned()
+            .collect()
     }
 }
 
@@ -206,10 +211,7 @@ async fn admin_dashboard(State(state): State<AdminState>) -> Response {
     let last_hour = events.iter().filter(|e| e.timestamp >= cutoff_hour).count();
     let last_day = events.iter().filter(|e| e.timestamp >= cutoff_day).count();
 
-    let error_count = events
-        .iter()
-        .filter(|e| e.status >= 400)
-        .count();
+    let error_count = events.iter().filter(|e| e.status >= 400).count();
 
     let avg_ms = if events.is_empty() {
         0
@@ -291,7 +293,11 @@ fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
     }
     let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) { months_leap } else { months_normal };
+    let months = if is_leap(year) {
+        months_leap
+    } else {
+        months_normal
+    };
     let mut month = 1u32;
     for &len in &months {
         if days_remaining < len {

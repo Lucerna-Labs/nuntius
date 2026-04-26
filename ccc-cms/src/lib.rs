@@ -104,4 +104,3 @@ impl Plugin for CmsPlugin {
         self
     }
 }
-

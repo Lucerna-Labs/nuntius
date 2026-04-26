@@ -29,7 +29,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
-use tower_http::{cors::{Any as CorsAny, CorsLayer}, services::ServeDir};
+use tower_http::{
+    cors::{Any as CorsAny, CorsLayer},
+    services::ServeDir,
+};
 
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GB
 const DEFAULT_HLS_DIR: &str = "./media/video-hls";
@@ -145,10 +148,7 @@ impl Plugin for VideoPodcastPlugin {
             Router::new()
                 .route("/videos", get(admin_list))
                 .route("/videos/new", get(admin_new_form).post(admin_create))
-                .route(
-                    "/videos/:id/edit",
-                    get(admin_edit_form).post(admin_update),
-                )
+                .route("/videos/:id/edit", get(admin_edit_form).post(admin_update))
                 .route("/videos/:id/delete", post(admin_delete))
                 .route("/videos/:id/retry", post(admin_retry))
                 .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
@@ -251,7 +251,11 @@ async fn transcode_one(state: &AppState, mut video: VideoPodcast) {
             } else {
                 stderr
             };
-            finish_failed(state, video, format!("ffmpeg exit {}: {}", o.status, trimmed));
+            finish_failed(
+                state,
+                video,
+                format!("ffmpeg exit {}: {}", o.status, trimmed),
+            );
         }
         Err(e) => finish_failed(state, video, format!("ffmpeg spawn failed: {}", e)),
     }
@@ -580,7 +584,13 @@ fn new_form_error(msg: &str) -> Response {
 fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     if cleaned.is_empty() {
         "video.bin".into()
@@ -639,7 +649,11 @@ fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
     }
     let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) { months_leap } else { months_normal };
+    let months = if is_leap(year) {
+        months_leap
+    } else {
+        months_normal
+    };
     let mut month = 1u32;
     for &len in &months {
         if days_remaining < len {

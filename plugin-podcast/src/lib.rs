@@ -15,6 +15,7 @@
 //! - POST /admin/podcasts/:id/delete      drop row + delete file
 
 use askama::Template;
+use axum::body::Body;
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{header, StatusCode},
@@ -22,11 +23,8 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use axum::body::Body;
 use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError};
-use ccc_database::{
-    CccDB, EpisodeStatus, PodcastEpisode, TranscriptionJob, TranscriptionStatus,
-};
+use ccc_database::{CccDB, EpisodeStatus, PodcastEpisode, TranscriptionJob, TranscriptionStatus};
 use rss::{
     extension::itunes::{ITunesChannelExtensionBuilder, ITunesItemExtensionBuilder},
     ChannelBuilder, EnclosureBuilder, GuidBuilder, ItemBuilder,
@@ -141,10 +139,7 @@ impl Plugin for PodcastPlugin {
         Some(
             Router::new()
                 .route("/podcasts", get(admin_list))
-                .route(
-                    "/podcasts/new",
-                    get(admin_new_form).post(admin_create),
-                )
+                .route("/podcasts/new", get(admin_new_form).post(admin_create))
                 .route(
                     "/podcasts/:id/edit",
                     get(admin_edit_form).post(admin_update),
@@ -310,10 +305,7 @@ async fn public_download(
     let headers = [
         (header::CONTENT_TYPE, ep.mime_type.clone()),
         (header::ACCEPT_RANGES, "bytes".into()),
-        (
-            header::CONTENT_LENGTH,
-            ep.size_bytes.to_string(),
-        ),
+        (header::CONTENT_LENGTH, ep.size_bytes.to_string()),
     ];
     (headers, body).into_response()
 }
@@ -631,7 +623,13 @@ fn new_form_error(msg: &str) -> Response {
 fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     if cleaned.is_empty() {
         "audio.bin".into()
@@ -751,7 +749,11 @@ fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
     }
     let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) { months_leap } else { months_normal };
+    let months = if is_leap(year) {
+        months_leap
+    } else {
+        months_normal
+    };
     let mut month = 1u32;
     for &len in &months {
         if days_remaining < len {

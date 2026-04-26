@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "phase-*", "rust-rewrite-foundation-*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  check:
+    name: cargo check / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+      - name: cargo clippy
+        # Match the local lint bar — workspace-wide, all targets, deny warnings.
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace

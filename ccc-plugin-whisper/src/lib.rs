@@ -92,8 +92,8 @@ impl SettingsStore {
     fn persist(&self) -> Result<(), PluginError> {
         let snap = self.snapshot();
         let file = SettingsFile { whisper: snap };
-        let raw = toml::to_string_pretty(&file)
-            .map_err(|e| PluginError::InitError(e.to_string()))?;
+        let raw =
+            toml::to_string_pretty(&file).map_err(|e| PluginError::InitError(e.to_string()))?;
         if let Some(parent) = self.path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).map_err(io_err)?;
@@ -172,7 +172,10 @@ impl Plugin for CccPluginWhisperPlugin {
         Some(
             Router::new()
                 .route("/transcripts", get(admin_list).post(admin_create))
-                .route("/transcripts/settings", get(settings_get).post(settings_post))
+                .route(
+                    "/transcripts/settings",
+                    get(settings_get).post(settings_post),
+                )
                 .route("/transcripts/:id", get(admin_show))
                 .route("/transcripts/:id/transcript", post(admin_save_transcript))
                 .route("/transcripts/:id/requeue", post(admin_requeue))
@@ -555,7 +558,11 @@ fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
 
     let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) { months_leap } else { months_normal };
+    let months = if is_leap(year) {
+        months_leap
+    } else {
+        months_normal
+    };
     let mut month = 1u32;
     for &len in &months {
         if days_remaining < len {

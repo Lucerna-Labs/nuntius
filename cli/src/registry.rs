@@ -33,7 +33,9 @@ pub fn register_by_name(
             manager.register(ccc_plugin_podcast::PodcastPlugin::from_config(cfg))?;
         }
         "video-podcast" => {
-            manager.register(ccc_plugin_video_podcast::VideoPodcastPlugin::from_config(cfg))?;
+            manager.register(ccc_plugin_video_podcast::VideoPodcastPlugin::from_config(
+                cfg,
+            ))?;
         }
         "store" => {
             manager.register(ccc_plugin_store::PluginStorePlugin)?;

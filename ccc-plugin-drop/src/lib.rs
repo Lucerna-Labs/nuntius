@@ -84,7 +84,10 @@ async fn sdp_offer_handler(Json(offer): Json<SdpMessage>) -> impl IntoResponse {
 /// Handler to receive ICE candidates to establish the direct file transfer link.
 async fn ice_candidate_handler(Json(candidate): Json<IceCandidate>) -> impl IntoResponse {
     // We pass this candidate to our `webrtc.rs` PeerConnection to establish the UDP/TCP data link.
-    println!("Received WebRTC Drop ICE Candidate: {:?}", candidate.candidate);
+    println!(
+        "Received WebRTC Drop ICE Candidate: {:?}",
+        candidate.candidate
+    );
 
     axum::http::StatusCode::OK
 }
