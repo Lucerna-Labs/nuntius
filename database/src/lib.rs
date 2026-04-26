@@ -32,6 +32,9 @@ const NEWSLETTER_SUBSCRIBERS_TABLE: TableDefinition<u64, &[u8]> =
 const NEWSLETTER_EMAIL_INDEX: TableDefinition<&str, u64> =
     TableDefinition::new("newsletter_email_index");
 
+/// Ads (Ads plugin).
+const ADS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("ads");
+
 /// The main table where tracks are stored.
 /// Key: Track ID (u64)
 /// Value: Serialized Track
@@ -144,6 +147,20 @@ pub struct TranscriptionJob {
     pub updated_at: u64,
 }
 
+/// An ad creative — the unit served via `/api/ads/next`.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Ad {
+    pub id: u64,
+    pub name: String,
+    pub media_url: String,
+    pub click_url: Option<String>,
+    pub active: bool,
+    /// Selection weight for round-robin / weighted random. Higher = more often.
+    pub weight: u32,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
 /// A newsletter subscriber.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Subscriber {
@@ -203,6 +220,7 @@ impl CccDB {
             write_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
             write_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
             write_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
+            write_txn.open_table(ADS_TABLE)?;
             write_txn.open_table(TRACKS_TABLE)?;
             write_txn.open_table(PODCASTS_TABLE)?;
             write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
@@ -600,6 +618,49 @@ impl CccDB {
             .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
             .collect();
         out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(out)
+    }
+
+    // --- ADS ---
+
+    pub fn upsert_ad(&self, ad: &Ad) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(ADS_TABLE)?;
+            let bytes = bincode::serialize(ad).unwrap();
+            table.insert(ad.id, bytes.as_slice())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn get_ad(&self, id: u64) -> Result<Option<Ad>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(ADS_TABLE)?;
+        Ok(table
+            .get(id)?
+            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+    }
+
+    pub fn delete_ad(&self, id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(ADS_TABLE)?;
+            table.remove(id)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn all_ads(&self) -> Result<Vec<Ad>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(ADS_TABLE)?;
+        let mut out: Vec<Ad> = table
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
+            .collect();
+        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(out)
     }
 }

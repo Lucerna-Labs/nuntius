@@ -1,0 +1,46 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}{{ heading }} — Ads — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>{{ heading }}</h1>
+</header>
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="{{ form_action }}" class="cms-form" style="max-width:680px">
+  <label class="cms-field">
+    <span class="cms-field__label">Internal name</span>
+    <input class="cms-field__input" type="text" name="name" required value="{{ name }}" autofocus>
+    <span class="cms-field__hint">For your reference. Not shown to listeners.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Media URL</span>
+    <input class="cms-field__input" type="url" name="media_url" required value="{{ media_url }}">
+    <span class="cms-field__hint">URL to the audio (or video) ad creative. Stored on S3 or any reachable host.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Click-through URL (optional)</span>
+    <input class="cms-field__input" type="url" name="click_url" value="{{ click_url }}">
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Weight</span>
+    <input class="cms-field__input" type="number" name="weight" min="1" max="1000" required value="{{ weight }}">
+    <span class="cms-field__hint">Higher = served more often.</span>
+  </label>
+  <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+    <input type="checkbox" name="active" value="1" {% if active %}checked{% endif %}>
+    <span>Active (eligible to serve)</span>
+  </label>
+
+  <div style="display:flex; gap:8px;">
+    <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+    <a class="cms-btn" href="/admin/ads" style="display:inline-flex; align-items:center; padding:10px 16px;">Cancel</a>
+  </div>
+</form>
+{% endblock %}
