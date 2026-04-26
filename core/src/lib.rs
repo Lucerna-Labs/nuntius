@@ -49,6 +49,20 @@ pub trait Plugin: Send + Sync {
         None
     }
 
+    /// Admin-only HTTP routes contributed by this plugin.
+    ///
+    /// These are *only* mounted if the `ccc-cms` plugin is enabled — that
+    /// plugin owns the admin URL prefix, the auth middleware, and the
+    /// merging of all `admin_routes()` returned here.
+    ///
+    /// **Security invariant:** if CMS is disabled, admin routes do not
+    /// mount, period. They never go on the wire unprotected.
+    ///
+    /// Default: no admin routes.
+    fn admin_routes(&self, _ctx: &AppContext) -> Option<Router> {
+        None
+    }
+
     /// Return an `Any` reference to allow downcasting if necessary for specific plugin interactions.
     fn as_any(&self) -> &dyn Any;
 }
@@ -110,9 +124,31 @@ impl PluginManager {
         router
     }
 
+    /// Merge every plugin's `admin_routes()`. Used by the CMS plugin to
+    /// build the auth-gated admin surface — see the `Plugin::admin_routes`
+    /// security invariant.
+    pub fn merged_admin_router(&self, ctx: &AppContext) -> Router {
+        let mut router = Router::new();
+        for p in &self.plugins {
+            if let Some(r) = p.admin_routes(ctx) {
+                router = router.merge(r);
+            }
+        }
+        router
+    }
+
     /// Names of all registered (= enabled) plugins.
     pub fn names(&self) -> Vec<&'static str> {
         self.plugins.iter().map(|p| p.name()).collect()
+    }
+
+    /// Look up a registered plugin by its concrete type.
+    ///
+    /// Used by the host to fetch state held by a specific plugin (e.g. the
+    /// CMS plugin's admin token) without round-tripping through config or
+    /// shared globals.
+    pub fn find<P: Plugin + 'static>(&self) -> Option<&P> {
+        self.plugins.iter().find_map(|p| p.as_any().downcast_ref::<P>())
     }
 }
 
