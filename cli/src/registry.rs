@@ -61,7 +61,7 @@ pub fn register_by_name(
             manager.register(ccc_plugin_ads::CccPluginAdsPlugin)?;
         }
         "analytics" => {
-            manager.register(ccc_plugin_analytics::CccPluginAnalyticsPlugin)?;
+            manager.register(ccc_plugin_analytics::CccPluginAnalyticsPlugin::new())?;
         }
         "newsletter" => {
             let plugin = ccc_plugin_newsletter::CccPluginNewsletterPlugin::from_config(cfg)?;

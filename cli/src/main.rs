@@ -124,6 +124,13 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
         );
     }
 
+    // Analytics is a global middleware: wrap the entire app once it's
+    // assembled. Disabled => no recording, no overhead.
+    if let Some(analytics) = manager.find::<ccc_plugin_analytics::CccPluginAnalyticsPlugin>() {
+        app = ccc_plugin_analytics::apply_recording_layer(app, analytics);
+        println!("Analytics middleware engaged");
+    }
+
     if let Err(e) = ccc_api::serve(&addr, app).await {
         eprintln!("Failed to start server: {}", e);
     }
