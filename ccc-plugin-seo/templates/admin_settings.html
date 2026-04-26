@@ -1,0 +1,54 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}SEO — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>SEO</h1>
+  <p class="cms-page__lede">How CCC describes your site to search engines and social cards.</p>
+</header>
+
+{% match saved %}
+  {% when Some with (_) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">Saved.</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/seo" class="cms-form" style="max-width:680px">
+  <label class="cms-field">
+    <span class="cms-field__label">Site name</span>
+    <input class="cms-field__input" type="text" name="site_name" value="{{ site_name }}" required>
+    <span class="cms-field__hint">Shows up in browser tab titles and social cards.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Public URL</span>
+    <input class="cms-field__input" type="url" name="site_url" value="{{ site_url }}" required>
+    <span class="cms-field__hint">Used to build absolute URLs in the sitemap.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Default description</span>
+    <textarea class="cms-field__input" name="default_description" rows="3" maxlength="320">{{ default_description }}</textarea>
+    <span class="cms-field__hint">Up to ~320 chars. Used on pages that don't set their own meta description.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">robots.txt</span>
+    <textarea class="cms-field__input" name="robots_txt" rows="6" style="font-family: monospace;">{{ robots_txt }}</textarea>
+    <span class="cms-field__hint">Served verbatim at <code>/robots.txt</code>.</span>
+  </label>
+  <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Public endpoints</h3>
+  <ul class="cms-rail__list">
+    <li><a href="/sitemap.xml">/sitemap.xml</a></li>
+    <li><a href="/robots.txt">/robots.txt</a></li>
+  </ul>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>What's in the sitemap</h3>
+  <p>Currently: published blog posts. Podcasts and video podcasts will be added when their public reader lands.</p>
+</div>
+{% endblock %}

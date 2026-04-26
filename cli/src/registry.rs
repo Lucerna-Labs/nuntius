@@ -75,7 +75,8 @@ pub fn register_by_name(
             manager.register(plugin)?;
         }
         "seo" => {
-            manager.register(ccc_plugin_seo::CccPluginSeoPlugin)?;
+            let plugin = ccc_plugin_seo::CccPluginSeoPlugin::from_config(cfg)?;
+            manager.register(plugin)?;
         }
         "theme-dark-matter" => {
             manager.register(ccc_plugin_theme_dark_matter::CccPluginThemeDarkMatterPlugin)?;

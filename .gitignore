@@ -12,6 +12,7 @@ whisper.toml
 /transcripts/
 s3.toml
 newsletter.toml
+seo.toml
 
 # Local logs from cargo runs we kept while bootstrapping
 cargo-check.log
