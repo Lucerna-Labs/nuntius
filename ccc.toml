@@ -33,9 +33,19 @@ enabled = [
 # writes the admin account into it.
 admin_store_path = "admin.toml"
 
+[plugin.podcast]
+# Where uploaded audio files are saved.
+audio_dir = "./media/podcast"
+# Secret token that gates the members-only RSS feed at
+# /podcasts/members.xml?token=<this>. Distribute privately to patrons.
+# CHANGE THIS before announcing the URL.
+members_token = "change-me"
+
 [plugin.video-podcast]
 # Directory that holds the HLS playlists and segments served at /video/hls/*.
-hls_dir = "./hls"
+hls_dir = "./media/video-hls"
+source_dir = "./media/video-source"
+ffmpeg = "ffmpeg"
 
 [plugin.activitypub]
 # Where the federation actor settings (username, host, bio, public key) live.

@@ -41,6 +41,10 @@
       <span>Published — live.</span>
     </label>
   </fieldset>
+  <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+    <input type="checkbox" name="members_only" value="1" {% if members_only %}checked{% endif %}>
+    <span>Members-only — appears in <code>/podcasts/members.xml</code> only.</span>
+  </label>
   <div style="display:flex; gap:8px;">
     <button class="cms-btn cms-btn--primary" type="submit">Save</button>
     <a class="cms-btn" href="/admin/podcasts" style="display:inline-flex; align-items:center; padding:10px 16px;">Back</a>

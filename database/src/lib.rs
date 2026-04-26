@@ -229,6 +229,10 @@ pub struct PodcastEpisode {
     pub published_at: Option<u64>,
     /// Foreign key into TRANSCRIPTION_JOBS_TABLE, if a job was queued.
     pub transcript_job_id: Option<u64>,
+    /// True iff this episode should only appear in the members-only feed
+    /// (`/podcasts/members.xml?token=...`). Drops out of the public feed.
+    #[serde(default)]
+    pub members_only: bool,
 }
 
 /// Lifecycle of a video podcast episode:

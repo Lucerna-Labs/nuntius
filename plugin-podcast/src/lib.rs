@@ -23,7 +23,7 @@ use axum::{
     Form, Router,
 };
 use axum::body::Body;
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError};
 use ccc_database::{
     CccDB, EpisodeStatus, PodcastEpisode, TranscriptionJob, TranscriptionStatus,
 };
@@ -42,30 +42,43 @@ use tokio_util::io::ReaderStream;
 const MAX_UPLOAD_BYTES: usize = 500 * 1024 * 1024; // 500 MB
 const DEFAULT_AUDIO_DIR: &str = "./media/podcast";
 
+/// Default for the members-only feed token. Operators MUST override this in
+/// ccc.toml ([plugin.podcast].members_token) before announcing the URL.
+const DEFAULT_MEMBERS_TOKEN: &str = "change-me";
+
 // ============================================================================
 // Plugin
 // ============================================================================
 
 pub struct PodcastPlugin {
     audio_dir: PathBuf,
+    members_token: String,
 }
 
 impl PodcastPlugin {
     pub fn new(audio_dir: &str) -> Self {
         Self {
             audio_dir: PathBuf::from(audio_dir),
+            members_token: DEFAULT_MEMBERS_TOKEN.to_string(),
         }
     }
 
     pub fn from_config(cfg: &ccc_core::CccConfig) -> Self {
-        let audio_dir = cfg
-            .plugin
-            .get("podcast")
+        let table = cfg.plugin.get("podcast");
+        let audio_dir = table
             .and_then(|t| t.get("audio_dir"))
             .and_then(|v| v.as_str())
             .unwrap_or(DEFAULT_AUDIO_DIR)
             .to_string();
-        Self::new(&audio_dir)
+        let members_token = table
+            .and_then(|t| t.get("members_token"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(DEFAULT_MEMBERS_TOKEN)
+            .to_string();
+        Self {
+            audio_dir: PathBuf::from(audio_dir),
+            members_token,
+        }
     }
 }
 
@@ -73,6 +86,8 @@ impl PodcastPlugin {
 struct AppState {
     db: Arc<CccDB>,
     audio_dir: Arc<PathBuf>,
+    members_token: Arc<String>,
+    events: Arc<EventBus>,
 }
 
 impl Plugin for PodcastPlugin {
@@ -103,10 +118,13 @@ impl Plugin for PodcastPlugin {
         let state = AppState {
             db: ctx.db.clone(),
             audio_dir: Arc::new(self.audio_dir.clone()),
+            members_token: Arc::new(self.members_token.clone()),
+            events: ctx.events.clone(),
         };
         Some(
             Router::new()
                 .route("/podcasts/feed.xml", get(public_feed))
+                .route("/podcasts/members.xml", get(public_members_feed))
                 .route("/podcasts/download/:id", get(public_download))
                 .route("/podcasts/:slug", get(public_show))
                 .with_state(state),
@@ -117,6 +135,8 @@ impl Plugin for PodcastPlugin {
         let state = AppState {
             db: ctx.db.clone(),
             audio_dir: Arc::new(self.audio_dir.clone()),
+            members_token: Arc::new(self.members_token.clone()),
+            events: ctx.events.clone(),
         };
         Some(
             Router::new()
@@ -154,13 +174,38 @@ impl Plugin for PodcastPlugin {
 // ============================================================================
 
 async fn public_feed(State(state): State<AppState>) -> Response {
+    let raw = match state.db.latest_published_podcast_episodes(50) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let episodes: Vec<_> = raw.into_iter().filter(|e| !e.members_only).collect();
+    build_feed_response("Creator Command Center Podcast", &episodes)
+}
+
+#[derive(Deserialize)]
+struct MembersFeedQuery {
+    token: Option<String>,
+}
+
+async fn public_members_feed(
+    State(state): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<MembersFeedQuery>,
+) -> Response {
+    let supplied = q.token.unwrap_or_default();
+    let expected: &str = state.members_token.as_str();
+    if expected.is_empty() || supplied != expected {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let episodes = match state.db.latest_published_podcast_episodes(50) {
         Ok(v) => v,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    build_feed_response("Creator Command Center Podcast (Members)", &episodes)
+}
 
+fn build_feed_response(title: &str, episodes: &[ccc_database::PodcastEpisode]) -> Response {
     let mut items = Vec::with_capacity(episodes.len());
-    for ep in &episodes {
+    for ep in episodes {
         let pub_ts = ep.published_at.unwrap_or(ep.updated_at);
         let download_url = format!("/podcasts/download/{}", ep.id);
         let item = ItemBuilder::default()
@@ -195,7 +240,7 @@ async fn public_feed(State(state): State<AppState>) -> Response {
     }
 
     let channel = ChannelBuilder::default()
-        .title("Creator Command Center Podcast")
+        .title(title)
         .link("/podcasts/feed.xml")
         .description("Episodes published from this Creator Command Center.")
         .itunes_ext(Some(
@@ -239,12 +284,23 @@ async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) ->
     Html(body).into_response()
 }
 
-async fn public_download(State(state): State<AppState>, Path(id): Path<u64>) -> Response {
+async fn public_download(
+    State(state): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<MembersFeedQuery>,
+    Path(id): Path<u64>,
+) -> Response {
     let ep = match state.db.get_podcast_episode(id) {
         Ok(Some(e)) if e.status == EpisodeStatus::Published => e,
         Ok(_) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    if ep.members_only {
+        let supplied = q.token.unwrap_or_default();
+        let expected: &str = state.members_token.as_str();
+        if expected.is_empty() || supplied != expected {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
     let file = match tokio::fs::File::open(&ep.audio_path).await {
         Ok(f) => f,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
@@ -271,6 +327,7 @@ async fn public_download(State(state): State<AppState>, Path(id): Path<u64>) -> 
 struct AdminListPage<'a> {
     episodes: Vec<EpisodeRow>,
     status: Option<&'a str>,
+    members_token: String,
 }
 
 struct EpisodeRow {
@@ -301,6 +358,7 @@ async fn admin_list(State(state): State<AppState>) -> Response {
     render(AdminListPage {
         episodes: rows,
         status: None,
+        members_token: state.members_token.as_ref().clone(),
     })
 }
 
@@ -327,6 +385,7 @@ async fn admin_create(State(state): State<AppState>, mut multipart: Multipart) -
     let mut audio_path_on_disk: Option<PathBuf> = None;
     let mut audio_mime: Option<String> = None;
     let mut audio_size: u64 = 0;
+    let mut members_only = false;
     let now = unix_now();
 
     if let Err(e) = std::fs::create_dir_all(state.audio_dir.as_ref()) {
@@ -345,6 +404,7 @@ async fn admin_create(State(state): State<AppState>, mut multipart: Multipart) -
             "slug" => slug = field.text().await.unwrap_or_default(),
             "description" => description = field.text().await.unwrap_or_default(),
             "queue_transcription" => queue_transcription = true,
+            "members_only" => members_only = true,
             "audio" => {
                 let original = field.file_name().unwrap_or("upload.bin").to_string();
                 let mime = field
@@ -410,6 +470,7 @@ async fn admin_create(State(state): State<AppState>, mut multipart: Multipart) -
         updated_at: now,
         published_at: None,
         transcript_job_id: None,
+        members_only,
     };
 
     // Optional Whisper integration: queue a transcription job that points
@@ -454,6 +515,7 @@ struct AdminEditPage<'a> {
     created_human: String,
     updated_human: String,
     transcript_job_id: Option<u64>,
+    members_only: bool,
     error: Option<&'a str>,
 }
 
@@ -475,6 +537,7 @@ async fn admin_edit_form(State(state): State<AppState>, Path(id): Path<u64>) -> 
         created_human: format_unix(ep.created_at),
         updated_human: format_unix(ep.updated_at),
         transcript_job_id: ep.transcript_job_id,
+        members_only: ep.members_only,
         error: None,
     })
 }
@@ -485,6 +548,8 @@ struct EditForm {
     slug: String,
     description: String,
     status: String,
+    #[serde(default)]
+    members_only: Option<String>,
 }
 
 async fn admin_update(
@@ -504,8 +569,10 @@ async fn admin_update(
     ep.slug = form.slug.trim().to_string();
     ep.description = form.description;
     ep.status = new_status;
+    ep.members_only = form.members_only.is_some();
     ep.updated_at = now;
-    if new_status == EpisodeStatus::Published && !was_published {
+    let just_published = new_status == EpisodeStatus::Published && !was_published;
+    if just_published {
         ep.published_at = Some(now);
     } else if new_status == EpisodeStatus::Draft {
         ep.published_at = None;
@@ -523,8 +590,14 @@ async fn admin_update(
             created_human: format_unix(ep.created_at),
             updated_human: format_unix(ep.updated_at),
             transcript_job_id: ep.transcript_job_id,
+            members_only: ep.members_only,
             error: Some(&format!("Could not save: {}", e)),
         });
+    }
+    if just_published {
+        state
+            .events
+            .publish(Event::PodcastEpisodePublished { id: ep.id });
     }
     Redirect::to("/admin/podcasts").into_response()
 }

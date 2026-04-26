@@ -47,9 +47,17 @@
 <div class="cms-rail__card">
   <h3>Public endpoints</h3>
   <ul class="cms-rail__list">
-    <li><a href="/podcasts/feed.xml">RSS feed</a> (published episodes)</li>
+    <li><a href="/podcasts/feed.xml">RSS feed</a> (published, non-members-only)</li>
     <li><code>/podcasts/:slug</code> — episode page</li>
     <li><code>/podcasts/download/:id</code> — audio stream</li>
   </ul>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Members feed</h3>
+  <p>Includes everything (members-only included). Share privately.</p>
+  <p style="font-family:monospace; word-break:break-all;">/podcasts/members.xml?token={{ members_token }}</p>
+  {% if members_token == "change-me" %}
+    <p><strong>Set <code>[plugin.podcast].members_token</code> in <code>ccc.toml</code> to a real secret.</strong></p>
+  {% endif %}
 </div>
 {% endblock %}
