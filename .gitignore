@@ -3,6 +3,10 @@
 *.pdb
 .DS_Store
 
+# Runtime artifacts (redb databases, HLS output, etc.)
+*.redb
+/hls/
+
 # Local logs from cargo runs we kept while bootstrapping
 cargo-check.log
 cargo-clippy.log

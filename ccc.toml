@@ -1,0 +1,30 @@
+# Creator Command Center (CCC) — runtime configuration.
+#
+# This file decides which plugins are CONSTRUCTED at startup. Plugins not
+# listed in `[plugins].enabled` are NOT instantiated: no memory, no routes,
+# no background tasks. "Disabled" means absent, not idle.
+#
+# Run `ccc-cli plugins` to see the full list of plugins this build knows.
+
+[server]
+host = "0.0.0.0"
+port = 3000
+
+[database]
+path = "ccc.redb"
+
+[plugins]
+# A minimal default: just the substantive plugins that actually have logic.
+# Add others (drop, call-studio, store, blog, plus the ccc-plugin-* stubs)
+# when you want them on.
+enabled = [
+    "podcast",
+    "video-podcast",
+]
+
+# Per-plugin configuration goes under [plugin.<name>]. Plugins read the
+# subtable they own; everything else is ignored.
+
+[plugin.video-podcast]
+# Directory that holds the HLS playlists and segments served at /video/hls/*.
+hls_dir = "./hls"

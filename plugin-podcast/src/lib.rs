@@ -5,7 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
-use ccc_core::{Plugin, PluginError};
+use ccc_core::{AppContext, Plugin, PluginError};
 use ccc_database::CccDB;
 use rss::{ChannelBuilder, ItemBuilder};
 use std::any::Any;
@@ -52,8 +52,11 @@ impl Plugin for PodcastPlugin {
 
     fn init(&mut self) -> Result<(), PluginError> {
         println!("Initializing Podcast Plugin against DB at {}...", self.db_path);
-        // In a real implementation, we would register the `build_router` with the central API server.
         Ok(())
+    }
+
+    fn routes(&self, ctx: &AppContext) -> Option<Router> {
+        Some(Self::build_router(ctx.db.clone()))
     }
 
     fn as_any(&self) -> &dyn Any {

@@ -8,4 +8,22 @@ clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.0", features = ["full"] }
 ccc-api = { path = "../api" }
 ccc-core = { path = "../core" }
+ccc-database = { path = "../database" }
 ccc-radio-engine = { path = "../radio-engine" }
+
+# All in-tree plugins. Compiled in; only constructed when listed in ccc.toml.
+ccc-plugin-blog = { path = "../plugin-blog" }
+ccc-plugin-podcast = { path = "../plugin-podcast" }
+ccc-plugin-video-podcast = { path = "../plugin-video-podcast" }
+ccc-plugin-store = { path = "../plugin-store" }
+ccc-plugin-activitypub = { path = "../ccc-plugin-activitypub" }
+ccc-plugin-ads = { path = "../ccc-plugin-ads" }
+ccc-plugin-analytics = { path = "../ccc-plugin-analytics" }
+ccc-plugin-call-studio = { path = "../ccc-plugin-call-studio" }
+ccc-plugin-drop = { path = "../ccc-plugin-drop" }
+ccc-plugin-newsletter = { path = "../ccc-plugin-newsletter" }
+ccc-plugin-patreon = { path = "../ccc-plugin-patreon" }
+ccc-plugin-s3 = { path = "../ccc-plugin-s3" }
+ccc-plugin-seo = { path = "../ccc-plugin-seo" }
+ccc-plugin-theme-dark-matter = { path = "../ccc-plugin-theme-dark-matter" }
+ccc-plugin-whisper = { path = "../ccc-plugin-whisper" }

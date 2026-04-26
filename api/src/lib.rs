@@ -1,34 +1,40 @@
-use axum::{
-    routing::get,
-    Router,
-};
+use axum::{routing::get, Router};
+use ccc_core::{AppContext, PluginManager};
 use tokio::net::TcpListener;
 
-/// A simple handler for the health check endpoint.
+/// Health check endpoint.
 async fn health_check() -> &'static str {
     "OK - Creator Command Center (CCC) API is running."
 }
 
-/// A simple handler for the version endpoint.
+/// API version (the `ccc-api` crate version).
 async fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// Create and configure the main API router.
-pub fn create_router() -> Router {
+/// Build the *base* router — only the always-on host endpoints.
+///
+/// This is what the host always exposes, even if no plugins are enabled.
+pub fn base_router() -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/version", get(version))
 }
 
-/// Run the server, binding to the specified address.
+/// Build the full application router: base routes + every enabled plugin's routes.
 ///
-/// Example address: `"0.0.0.0:3000"`
-pub async fn serve(addr: &str) -> Result<(), std::io::Error> {
-    let app = create_router();
+/// Plugins that did not opt into HTTP (default `routes()` returning `None`)
+/// contribute nothing — they pay no cost in the route tree.
+pub fn app_router(plugins: &PluginManager, ctx: &AppContext) -> Router {
+    base_router().merge(plugins.merged_router(ctx))
+}
 
+/// Run the server with a fully built `Router`.
+///
+/// The caller is responsible for assembling the router (typically via
+/// `app_router(&manager, &ctx)`); `ccc-api` does not own plugin lifecycle.
+pub async fn serve(addr: &str, app: Router) -> Result<(), std::io::Error> {
     let listener = TcpListener::bind(addr).await?;
     println!("Server running on {}", addr);
-
     axum::serve(listener, app).await
 }

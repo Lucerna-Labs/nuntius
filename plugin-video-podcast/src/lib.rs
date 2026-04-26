@@ -5,7 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
-use ccc_core::{Plugin, PluginError};
+use ccc_core::{AppContext, Plugin, PluginError};
 use ccc_database::CccDB;
 use std::any::Any;
 use std::sync::Arc;
@@ -62,6 +62,10 @@ impl Plugin for VideoPodcastPlugin {
     fn init(&mut self) -> Result<(), PluginError> {
         println!("Initializing Video Podcast Plugin (HLS Directory: {})", self.hls_base_path);
         Ok(())
+    }
+
+    fn routes(&self, ctx: &AppContext) -> Option<axum::Router> {
+        Some(self.build_router(ctx.db.clone()))
     }
 
     fn as_any(&self) -> &dyn Any {

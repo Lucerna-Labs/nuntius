@@ -3,7 +3,7 @@ use axum::{
     routing::post,
     Router,
 };
-use ccc_core::{Plugin, PluginError};
+use ccc_core::{AppContext, Plugin, PluginError};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 
@@ -52,6 +52,10 @@ impl Plugin for DropPlugin {
     fn init(&mut self) -> Result<(), PluginError> {
         println!("Initializing CCC Drop (WebRTC P2P File Transfer)...");
         Ok(())
+    }
+
+    fn routes(&self, _ctx: &AppContext) -> Option<Router> {
+        Some(Self::build_router())
     }
 
     fn as_any(&self) -> &dyn Any {
