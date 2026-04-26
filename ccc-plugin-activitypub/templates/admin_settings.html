@@ -1,0 +1,78 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Federation — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Federation</h1>
+  <p class="cms-page__lede">
+    How your station appears on the Fediverse (Mastodon, Pleroma, etc.).
+  </p>
+</header>
+
+<div class="cms-alert cms-alert--info" style="background: rgba(91, 158, 255, 0.12); color: var(--text); margin-bottom: 16px; padding: 12px; border-radius: 8px; border: 1px solid var(--accent);">
+  <strong>Preview release.</strong> Your profile and outbox are discoverable.
+  Followers can find you, but they can't subscribe to your posts yet — signed
+  delivery is a follow-up. Discoverability still works (people on Mastodon
+  can search <code>@{{ username }}@{{ host }}</code>).
+</div>
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+{% match saved %}
+  {% when Some with (_) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">
+      Saved.
+    </div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/federation" class="cms-form" style="max-width:640px">
+  <label class="cms-field">
+    <span class="cms-field__label">Display name</span>
+    <input class="cms-field__input" type="text" name="display_name" value="{{ display_name }}"
+           required maxlength="80">
+    <span class="cms-field__hint">Shown next to your handle on Mastodon and others.</span>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Username</span>
+    <input class="cms-field__input" type="text" name="username" value="{{ username }}"
+           required pattern="[a-zA-Z0-9_]+" minlength="1" maxlength="32">
+    <span class="cms-field__hint">Just letters, digits, underscores. Becomes <code>@{{ username }}@{{ host }}</code>.</span>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Public hostname</span>
+    <input class="cms-field__input" type="text" name="host" value="{{ host }}"
+           required>
+    <span class="cms-field__hint">The domain this CCC instance is reachable at — e.g. <code>radio.example.com</code>.</span>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Bio / summary</span>
+    <textarea class="cms-field__input" name="summary" rows="4" maxlength="500">{{ summary }}</textarea>
+    <span class="cms-field__hint">Up to 500 characters. Plain text only.</span>
+  </label>
+
+  <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Your handle</h3>
+  <p style="font-family:monospace; word-break:break-all;">@{{ username }}@{{ host }}</p>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Public endpoints</h3>
+  <ul class="cms-rail__list" style="font-family:monospace; font-size:12px;">
+    <li><a href="/.well-known/webfinger?resource=acct:{{ username }}@{{ host }}">webfinger</a></li>
+    <li><a href="/users/{{ username }}">actor</a></li>
+    <li><a href="/users/{{ username }}/outbox">outbox</a></li>
+  </ul>
+</div>
+{% endblock %}

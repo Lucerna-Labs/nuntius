@@ -54,7 +54,8 @@ pub fn register_by_name(
             manager.register(ccc_plugin_call_studio::CallStudioPlugin)?;
         }
         "activitypub" => {
-            manager.register(ccc_plugin_activitypub::CccPluginActivitypubPlugin)?;
+            let plugin = ccc_plugin_activitypub::CccPluginActivitypubPlugin::from_config(cfg)?;
+            manager.register(plugin)?;
         }
         "ads" => {
             manager.register(ccc_plugin_ads::CccPluginAdsPlugin)?;

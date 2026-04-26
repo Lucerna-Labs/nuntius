@@ -21,6 +21,7 @@ enabled = [
     "blog",
     "podcast",
     "video-podcast",
+    "activitypub",
 ]
 
 # Per-plugin configuration goes under [plugin.<name>]. Plugins read the
@@ -35,3 +36,8 @@ admin_store_path = "admin.toml"
 [plugin.video-podcast]
 # Directory that holds the HLS playlists and segments served at /video/hls/*.
 hls_dir = "./hls"
+
+[plugin.activitypub]
+# Where the federation actor settings (username, host, bio, public key) live.
+# Created on first boot; edit via /admin/federation in the browser.
+settings_path = "federation.toml"

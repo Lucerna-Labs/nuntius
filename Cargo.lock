@@ -388,10 +388,15 @@ dependencies = [
 name = "ccc-plugin-activitypub"
 version = "0.1.0"
 dependencies = [
+ "askama",
+ "askama_axum",
+ "axum",
  "ccc-core",
  "ccc-database",
  "serde",
+ "serde_json",
  "tokio",
+ "toml",
 ]
 
 [[package]]
