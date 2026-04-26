@@ -46,9 +46,15 @@ const TRACKS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("tracks")
 const PODCASTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("podcasts");
 
 /// The custom index table for quickly querying the latest podcast episodes.
-/// Key: Composite string of `[timestamp]_[episode_id]`
+/// Indexes ONLY published episodes (drafts excluded so the public RSS
+/// feed doesn't leak unpublished work).
+/// Key: Composite string of `[zero-padded published_at]_[episode_id]`
 /// Value: Episode ID (u64)
 const PODCASTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new("podcasts_chrono");
+
+/// Slug → episode-id lookup. Slugs unique across drafts + published.
+const PODCASTS_SLUG_INDEX: TableDefinition<&str, u64> =
+    TableDefinition::new("podcasts_slug_index");
 
 /// The main table where video podcast metadata is stored.
 /// Key: Video ID (u64)
@@ -178,15 +184,49 @@ pub struct Track {
     pub artist: String,
 }
 
-/// Example struct for a Podcast Episode
+/// Publication state of a podcast episode.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EpisodeStatus {
+    #[default]
+    Draft,
+    Published,
+}
+
+impl EpisodeStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EpisodeStatus::Draft => "draft",
+            EpisodeStatus::Published => "published",
+        }
+    }
+    pub fn from_form(s: &str) -> Self {
+        match s {
+            "published" => EpisodeStatus::Published,
+            _ => EpisodeStatus::Draft,
+        }
+    }
+}
+
+/// A podcast episode.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PodcastEpisode {
     pub id: u64,
+    pub slug: String,
     pub title: String,
     pub description: String,
-    pub file_path: String,
-    /// Unix timestamp of publication
-    pub publish_date: u64,
+    pub audio_path: String,
+    /// e.g. "audio/mpeg", "audio/mp4". Drives RSS enclosure type.
+    pub mime_type: String,
+    /// Bytes on disk — required for the RSS `enclosure length` attribute.
+    pub size_bytes: u64,
+    /// 0 if unknown — populated by the upload pipeline if it can probe.
+    pub duration_seconds: u64,
+    pub status: EpisodeStatus,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub published_at: Option<u64>,
+    /// Foreign key into TRANSCRIPTION_JOBS_TABLE, if a job was queued.
+    pub transcript_job_id: Option<u64>,
 }
 
 /// Example struct for a Video Podcast
@@ -224,6 +264,7 @@ impl CccDB {
             write_txn.open_table(TRACKS_TABLE)?;
             write_txn.open_table(PODCASTS_TABLE)?;
             write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
+            write_txn.open_table(PODCASTS_SLUG_INDEX)?;
             write_txn.open_table(VIDEO_PODCASTS_TABLE)?;
             write_txn.open_table(VIDEO_PODCASTS_CHRONO_INDEX)?;
         }
@@ -363,55 +404,123 @@ impl CccDB {
 
     // --- PODCASTS ---
 
-    /// Insert a podcast episode and update the chronological index.
-    pub fn insert_podcast_episode(&self, episode: &PodcastEpisode) -> Result<(), Error> {
+    fn podcast_chrono_key(published_at: u64, id: u64) -> String {
+        format!("{:020}_{}", published_at, id)
+    }
+
+    /// Insert or update an episode. Maintains slug uniqueness and the
+    /// Published-only chrono index in a single transaction.
+    pub fn upsert_podcast_episode(&self, ep: &PodcastEpisode) -> Result<(), Error> {
         let write_txn = self.db.begin_write()?;
         {
-            let mut main_table = write_txn.open_table(PODCASTS_TABLE)?;
-            let mut index_table = write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
+            let mut main = write_txn.open_table(PODCASTS_TABLE)?;
+            let mut chrono = write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
+            let mut slug = write_txn.open_table(PODCASTS_SLUG_INDEX)?;
 
-            let encoded: Vec<u8> = bincode::serialize(episode).unwrap();
-            main_table.insert(episode.id, encoded.as_slice())?;
+            if let Some(existing) = slug.get(ep.slug.as_str())? {
+                if existing.value() != ep.id {
+                    return Err(Error::Corrupted(format!(
+                        "podcast slug '{}' already used by episode {}",
+                        ep.slug,
+                        existing.value()
+                    )));
+                }
+            }
+            if let Some(prev_raw) = main.get(ep.id)? {
+                let prev: PodcastEpisode = bincode::deserialize(prev_raw.value()).unwrap();
+                if prev.slug != ep.slug {
+                    slug.remove(prev.slug.as_str())?;
+                }
+                if let Some(ts) = prev.published_at {
+                    chrono.remove(Self::podcast_chrono_key(ts, prev.id).as_str())?;
+                }
+            }
 
-            let chrono_key = format!("{:020}_{}", episode.publish_date, episode.id);
-            index_table.insert(chrono_key.as_str(), episode.id)?;
+            let bytes = bincode::serialize(ep).unwrap();
+            main.insert(ep.id, bytes.as_slice())?;
+            slug.insert(ep.slug.as_str(), ep.id)?;
+            if ep.status == EpisodeStatus::Published {
+                if let Some(ts) = ep.published_at {
+                    chrono.insert(Self::podcast_chrono_key(ts, ep.id).as_str(), ep.id)?;
+                }
+            }
         }
         write_txn.commit()?;
         Ok(())
     }
 
-    /// Retrieve the `limit` most recent podcast episodes using the custom index.
-    pub fn get_latest_podcast_episodes(&self, limit: usize) -> Result<Vec<PodcastEpisode>, Error> {
-        let read_txn = self.db.begin_read()?;
-        let index_table = read_txn.open_table(PODCASTS_CHRONO_INDEX)?;
-        let main_table = read_txn.open_table(PODCASTS_TABLE)?;
-
-        let mut results = Vec::new();
-
-        for item in index_table.range("0"..="9").unwrap().rev().take(limit) {
-            let (_, episode_id) = item.unwrap();
-            let ep_id_val = episode_id.value();
-
-            if let Some(encoded) = main_table.get(ep_id_val)? {
-                let episode: PodcastEpisode = bincode::deserialize(encoded.value()).unwrap();
-                results.push(episode);
+    pub fn delete_podcast_episode(&self, id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut main = write_txn.open_table(PODCASTS_TABLE)?;
+            let mut chrono = write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
+            let mut slug = write_txn.open_table(PODCASTS_SLUG_INDEX)?;
+            if let Some(prev_raw) = main.get(id)? {
+                let prev: PodcastEpisode = bincode::deserialize(prev_raw.value()).unwrap();
+                slug.remove(prev.slug.as_str())?;
+                if let Some(ts) = prev.published_at {
+                    chrono.remove(Self::podcast_chrono_key(ts, prev.id).as_str())?;
+                }
             }
+            main.remove(id)?;
         }
-
-        Ok(results)
+        write_txn.commit()?;
+        Ok(())
     }
 
-    /// Get a single podcast episode by its ID.
+    /// Most-recent published episodes for the public RSS feed.
+    pub fn latest_published_podcast_episodes(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<PodcastEpisode>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let chrono = read_txn.open_table(PODCASTS_CHRONO_INDEX)?;
+        let main = read_txn.open_table(PODCASTS_TABLE)?;
+        let mut out = Vec::new();
+        for item in chrono.range("0"..="9")?.rev().take(limit) {
+            let (_, id) = item?;
+            if let Some(raw) = main.get(id.value())? {
+                out.push(bincode::deserialize(raw.value()).unwrap());
+            }
+        }
+        Ok(out)
+    }
+
+    /// All episodes (drafts + published) — used by the admin list.
+    pub fn all_podcast_episodes(&self) -> Result<Vec<PodcastEpisode>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let main = read_txn.open_table(PODCASTS_TABLE)?;
+        let mut out: Vec<PodcastEpisode> = main
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
+            .collect();
+        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(out)
+    }
+
     pub fn get_podcast_episode(&self, id: u64) -> Result<Option<PodcastEpisode>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(PODCASTS_TABLE)?;
+        Ok(table
+            .get(id)?
+            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+    }
 
-        if let Some(encoded) = table.get(id)? {
-            let episode: PodcastEpisode = bincode::deserialize(encoded.value()).unwrap();
-            Ok(Some(episode))
-        } else {
-            Ok(None)
-        }
+    pub fn get_podcast_episode_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<PodcastEpisode>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let slug_table = read_txn.open_table(PODCASTS_SLUG_INDEX)?;
+        let main = read_txn.open_table(PODCASTS_TABLE)?;
+        let id = match slug_table.get(slug)? {
+            Some(v) => v.value(),
+            None => return Ok(None),
+        };
+        Ok(main
+            .get(id)?
+            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
     }
 
     // --- VIDEO PODCASTS ---

@@ -1,0 +1,55 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Episodes — Podcast — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Podcast episodes</h1>
+  <p class="cms-page__lede">{{ episodes.len() }} episode(s).</p>
+  <a class="cms-btn cms-btn--primary" href="/admin/podcasts/new" style="display:inline-block; margin-top:8px;">Upload episode</a>
+</header>
+
+{% match status %}
+  {% when Some with (msg) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+{% if episodes.is_empty() %}
+  <p>No episodes yet. Upload one to get a real RSS feed at <code>/podcasts/feed.xml</code>.</p>
+{% else %}
+<table class="cms-table">
+  <thead>
+    <tr><th>Title</th><th>Slug</th><th>Status</th><th>Size</th><th>Updated</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for e in episodes %}
+    <tr>
+      <td><a href="/admin/podcasts/{{ e.id }}/edit">{{ e.title }}</a></td>
+      <td><code>{{ e.slug }}</code></td>
+      <td><span class="cms-badge cms-badge--{{ e.status_str }}">{{ e.status_str }}</span></td>
+      <td>{{ e.size_human }}</td>
+      <td>{{ e.updated_human }}</td>
+      <td>
+        <form method="post" action="/admin/podcasts/{{ e.id }}/delete"
+              onsubmit="return confirm('Delete this episode and its audio?')" style="display:inline">
+          <button class="cms-btn cms-btn--danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Public endpoints</h3>
+  <ul class="cms-rail__list">
+    <li><a href="/podcasts/feed.xml">RSS feed</a> (published episodes)</li>
+    <li><code>/podcasts/:slug</code> — episode page</li>
+    <li><code>/podcasts/download/:id</code> — audio stream</li>
+  </ul>
+</div>
+{% endblock %}

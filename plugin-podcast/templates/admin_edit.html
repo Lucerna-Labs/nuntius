@@ -1,0 +1,67 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Edit episode — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>{{ title }}</h1>
+  <p class="cms-page__lede">
+    <span class="cms-badge cms-badge--{{ status_str }}">{{ status_str }}</span>
+    &nbsp;<code>{{ audio_path }}</code>
+  </p>
+</header>
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/podcasts/{{ id }}/edit" class="cms-form" style="max-width:680px">
+  <label class="cms-field">
+    <span class="cms-field__label">Title</span>
+    <input class="cms-field__input" type="text" name="title" required value="{{ title }}">
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Slug</span>
+    <input class="cms-field__input" type="text" name="slug" required pattern="[a-z0-9-]+" value="{{ slug }}">
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Description</span>
+    <textarea class="cms-field__input" name="description" rows="8">{{ description }}</textarea>
+  </label>
+  <fieldset class="cms-field">
+    <legend class="cms-field__label">Status</legend>
+    <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+      <input type="radio" name="status" value="draft" {% if status_str == "draft" %}checked{% endif %}>
+      <span>Draft — not in the public RSS feed.</span>
+    </label>
+    <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+      <input type="radio" name="status" value="published" {% if status_str == "published" %}checked{% endif %}>
+      <span>Published — live.</span>
+    </label>
+  </fieldset>
+  <div style="display:flex; gap:8px;">
+    <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+    <a class="cms-btn" href="/admin/podcasts" style="display:inline-flex; align-items:center; padding:10px 16px;">Back</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Episode</h3>
+  <ul class="cms-rail__list">
+    <li>Size: {{ size_human }}</li>
+    <li>MIME: <code>{{ mime_type }}</code></li>
+    <li>Created: {{ created_human }}</li>
+    <li>Updated: {{ updated_human }}</li>
+    {% match transcript_job_id %}
+      {% when Some with (jid) %}
+        <li>Transcript: <a href="/admin/transcripts/{{ jid }}">job #{{ jid }}</a></li>
+      {% when None %}
+        <li>Transcript: not queued</li>
+    {% endmatch %}
+  </ul>
+</div>
+{% endblock %}

@@ -30,13 +30,7 @@ pub fn register_by_name(
             manager.register(ccc_plugin_blog::StaticBlogPlugin)?;
         }
         "podcast" => {
-            // Plugin internally uses ctx.db at routes() time; db_path is informational.
-            let db_path = cfg
-                .database
-                .path
-                .to_string_lossy()
-                .into_owned();
-            manager.register(ccc_plugin_podcast::PodcastPlugin::new(&db_path))?;
+            manager.register(ccc_plugin_podcast::PodcastPlugin::from_config(cfg))?;
         }
         "video-podcast" => {
             // Per-plugin config under [plugin.video-podcast].

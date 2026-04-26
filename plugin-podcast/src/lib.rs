@@ -1,44 +1,78 @@
+//! Podcast plugin: episode CRUD, multipart upload, RSS feed,
+//! optional auto-queueing of Whisper transcription jobs.
+//!
+//! Public:
+//! - GET  /podcasts/feed.xml         RSS 2.0 + iTunes namespace, only Published
+//! - GET  /podcasts/:slug            HTML page for one episode
+//! - GET  /podcasts/download/:id     audio stream (Range-friendly via ServeFile)
+//!
+//! Admin:
+//! - GET  /admin/podcasts                 list (drafts + published)
+//! - GET  /admin/podcasts/new             upload form
+//! - POST /admin/podcasts/new             multipart create
+//! - GET  /admin/podcasts/:id/edit        edit form
+//! - POST /admin/podcasts/:id/edit        update metadata
+//! - POST /admin/podcasts/:id/delete      drop row + delete file
+
+use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{header, StatusCode},
-    response::IntoResponse,
-    routing::get,
-    Router,
+    response::{Html, IntoResponse, Redirect, Response},
+    routing::{get, post},
+    Form, Router,
 };
-use ccc_core::{AppContext, Plugin, PluginError};
-use ccc_database::CccDB;
-use rss::{ChannelBuilder, ItemBuilder};
-use std::any::Any;
-use std::sync::Arc;
-use tokio_util::io::ReaderStream;
 use axum::body::Body;
+use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_database::{
+    CccDB, EpisodeStatus, PodcastEpisode, TranscriptionJob, TranscriptionStatus,
+};
+use rss::{
+    extension::itunes::{ITunesChannelExtensionBuilder, ITunesItemExtensionBuilder},
+    ChannelBuilder, EnclosureBuilder, GuidBuilder, ItemBuilder,
+};
+use serde::Deserialize;
+use std::any::Any;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 
-/// State shared across the podcast routes.
-struct AppState {
-    db: Arc<CccDB>,
-}
+const MAX_UPLOAD_BYTES: usize = 500 * 1024 * 1024; // 500 MB
+const DEFAULT_AUDIO_DIR: &str = "./media/podcast";
 
-/// The main entry point for the Podcast Plugin.
+// ============================================================================
+// Plugin
+// ============================================================================
+
 pub struct PodcastPlugin {
-    db_path: String,
+    audio_dir: PathBuf,
 }
 
 impl PodcastPlugin {
-    pub fn new(db_path: &str) -> Self {
+    pub fn new(audio_dir: &str) -> Self {
         Self {
-            db_path: db_path.to_string(),
+            audio_dir: PathBuf::from(audio_dir),
         }
     }
 
-    /// Build the `axum` router for the podcast endpoints.
-    pub fn build_router(db: Arc<CccDB>) -> Router {
-        let state = Arc::new(AppState { db });
-
-        Router::new()
-            .route("/podcasts/feed.xml", get(rss_feed_handler))
-            .route("/podcasts/download/:id", get(download_episode_handler))
-            .with_state(state)
+    pub fn from_config(cfg: &ccc_core::CccConfig) -> Self {
+        let audio_dir = cfg
+            .plugin
+            .get("podcast")
+            .and_then(|t| t.get("audio_dir"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(DEFAULT_AUDIO_DIR)
+            .to_string();
+        Self::new(&audio_dir)
     }
+}
+
+#[derive(Clone)]
+struct AppState {
+    db: Arc<CccDB>,
+    audio_dir: Arc<PathBuf>,
 }
 
 impl Plugin for PodcastPlugin {
@@ -47,16 +81,67 @@ impl Plugin for PodcastPlugin {
     }
 
     fn version(&self) -> &'static str {
-        "0.1.0"
+        "0.3.0"
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
-        println!("Initializing Podcast Plugin against DB at {}...", self.db_path);
+        if let Err(e) = std::fs::create_dir_all(&self.audio_dir) {
+            return Err(PluginError::InitError(format!(
+                "podcast: could not create audio dir {}: {}",
+                self.audio_dir.display(),
+                e
+            )));
+        }
+        println!(
+            "Initializing Podcast Plugin (audio dir: {})",
+            self.audio_dir.display()
+        );
         Ok(())
     }
 
     fn routes(&self, ctx: &AppContext) -> Option<Router> {
-        Some(Self::build_router(ctx.db.clone()))
+        let state = AppState {
+            db: ctx.db.clone(),
+            audio_dir: Arc::new(self.audio_dir.clone()),
+        };
+        Some(
+            Router::new()
+                .route("/podcasts/feed.xml", get(public_feed))
+                .route("/podcasts/download/:id", get(public_download))
+                .route("/podcasts/:slug", get(public_show))
+                .with_state(state),
+        )
+    }
+
+    fn admin_routes(&self, ctx: &AppContext) -> Option<Router> {
+        let state = AppState {
+            db: ctx.db.clone(),
+            audio_dir: Arc::new(self.audio_dir.clone()),
+        };
+        Some(
+            Router::new()
+                .route("/podcasts", get(admin_list))
+                .route(
+                    "/podcasts/new",
+                    get(admin_new_form).post(admin_create),
+                )
+                .route(
+                    "/podcasts/:id/edit",
+                    get(admin_edit_form).post(admin_update),
+                )
+                .route("/podcasts/:id/delete", post(admin_delete))
+                .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+                .with_state(state),
+        )
+    }
+
+    fn admin_nav(&self, _ctx: &AppContext) -> Vec<AdminNavEntry> {
+        vec![AdminNavEntry {
+            label: "Podcast",
+            href: "/admin/podcasts".into(),
+            icon: "🎙️",
+            sort: 110,
+        }]
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -64,67 +149,548 @@ impl Plugin for PodcastPlugin {
     }
 }
 
-/// Handler to generate the RSS XML feed dynamically from the database.
-async fn rss_feed_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Get the latest 50 episodes
-    let episodes = state.db.get_latest_podcast_episodes(50).unwrap_or_default();
+// ============================================================================
+// Public handlers
+// ============================================================================
 
-    let mut items = Vec::new();
-    for ep in episodes {
+async fn public_feed(State(state): State<AppState>) -> Response {
+    let episodes = match state.db.latest_published_podcast_episodes(50) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    let mut items = Vec::with_capacity(episodes.len());
+    for ep in &episodes {
+        let pub_ts = ep.published_at.unwrap_or(ep.updated_at);
+        let download_url = format!("/podcasts/download/{}", ep.id);
         let item = ItemBuilder::default()
-            .title(ep.title)
-            .description(ep.description)
-            // Example link: In a real app this would be the actual public URL
-            .link(format!("https://radio.example.com/api/podcasts/download/{}", ep.id))
+            .title(Some(ep.title.clone()))
+            .description(Some(ep.description.clone()))
+            .link(Some(download_url.clone()))
+            .pub_date(Some(rfc2822_utc(pub_ts)))
+            .guid(Some(
+                GuidBuilder::default()
+                    .value(format!("urn:ccc:podcast:{}", ep.id))
+                    .permalink(false)
+                    .build(),
+            ))
+            .enclosure(Some(
+                EnclosureBuilder::default()
+                    .url(download_url)
+                    .length(ep.size_bytes.to_string())
+                    .mime_type(ep.mime_type.clone())
+                    .build(),
+            ))
+            .itunes_ext(Some(
+                ITunesItemExtensionBuilder::default()
+                    .duration(if ep.duration_seconds > 0 {
+                        Some(format_duration(ep.duration_seconds))
+                    } else {
+                        None
+                    })
+                    .build(),
+            ))
             .build();
         items.push(item);
     }
 
     let channel = ChannelBuilder::default()
-        .title("Creator Command Center (CCC) High-Performance Podcast")
-        .link("https://radio.example.com")
-        .description("A sample podcast generated purely in Rust.")
+        .title("Creator Command Center Podcast")
+        .link("/podcasts/feed.xml")
+        .description("Episodes published from this Creator Command Center.")
+        .itunes_ext(Some(
+            ITunesChannelExtensionBuilder::default()
+                .author(Some("Creator Command Center".into()))
+                .build(),
+        ))
         .items(items)
         .build();
 
     let xml = channel.to_string();
-
     (
         [(header::CONTENT_TYPE, "application/rss+xml; charset=utf-8")],
         xml,
     )
+        .into_response()
 }
 
-/// Handler to securely and efficiently stream a podcast episode from disk.
-/// This uses `tokio::fs::File` and `ReaderStream` to serve the file asynchronously,
-/// supporting HTTP Range Requests with almost zero RAM usage.
-async fn download_episode_handler(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<u64>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let episode = state
-        .db
-        .get_podcast_episode(id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
+    let ep = match state.db.get_podcast_episode_by_slug(&slug) {
+        Ok(Some(e)) if e.status == EpisodeStatus::Published => e,
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let body = format!(
+        r#"<!doctype html><html lang="en"><head><meta charset="UTF-8"><title>{} — Podcast</title>
+<link rel="stylesheet" href="/admin/static/admin.css">
+<style>.episode {{ max-width: 720px; margin: 60px auto; padding: 0 24px; }}
+.episode audio {{ width: 100%; margin-top: 16px; }}</style></head>
+<body class="cms"><main class="episode">
+<p><a href="/podcasts/feed.xml">← RSS feed</a></p>
+<h1>{}</h1>
+<audio controls preload="metadata" src="/podcasts/download/{}"></audio>
+<p style="margin-top: 16px; white-space: pre-wrap;">{}</p>
+</main></body></html>"#,
+        html_escape(&ep.title),
+        html_escape(&ep.title),
+        ep.id,
+        html_escape(&ep.description),
+    );
+    Html(body).into_response()
+}
 
-    // Open the file asynchronously
-    let file = tokio::fs::File::open(&episode.file_path)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-
-    // Convert the file into an asynchronous stream of bytes
+async fn public_download(State(state): State<AppState>, Path(id): Path<u64>) -> Response {
+    let ep = match state.db.get_podcast_episode(id) {
+        Ok(Some(e)) if e.status == EpisodeStatus::Published => e,
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let file = match tokio::fs::File::open(&ep.audio_path).await {
+        Ok(f) => f,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
-
-    // Return the response, informing the client it's an audio stream
     let headers = [
-        (header::CONTENT_TYPE, "audio/mpeg"),
-        // Note: For full range request support (scrubbing/seeking),
-        // we would wrap this in tower_http::services::ServeFile.
-        // This streaming body handles the raw delivery efficiently.
-        (header::ACCEPT_RANGES, "bytes"),
+        (header::CONTENT_TYPE, ep.mime_type.clone()),
+        (header::ACCEPT_RANGES, "bytes".into()),
+        (
+            header::CONTENT_LENGTH,
+            ep.size_bytes.to_string(),
+        ),
     ];
+    (headers, body).into_response()
+}
 
-    Ok((headers, body))
+// ============================================================================
+// Admin handlers
+// ============================================================================
+
+#[derive(Template)]
+#[template(path = "admin_list.html")]
+struct AdminListPage<'a> {
+    episodes: Vec<EpisodeRow>,
+    status: Option<&'a str>,
+}
+
+struct EpisodeRow {
+    id: u64,
+    title: String,
+    slug: String,
+    status_str: &'static str,
+    size_human: String,
+    updated_human: String,
+}
+
+async fn admin_list(State(state): State<AppState>) -> Response {
+    let raw = match state.db.all_podcast_episodes() {
+        Ok(v) => v,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let rows: Vec<EpisodeRow> = raw
+        .into_iter()
+        .map(|e| EpisodeRow {
+            id: e.id,
+            title: e.title,
+            slug: e.slug,
+            status_str: e.status.as_str(),
+            size_human: human_bytes(e.size_bytes),
+            updated_human: format_unix(e.updated_at),
+        })
+        .collect();
+    render(AdminListPage {
+        episodes: rows,
+        status: None,
+    })
+}
+
+#[derive(Template)]
+#[template(path = "admin_new.html")]
+struct AdminNewPage<'a> {
+    error: Option<&'a str>,
+    max_mb: usize,
+}
+
+async fn admin_new_form() -> Response {
+    render(AdminNewPage {
+        error: None,
+        max_mb: MAX_UPLOAD_BYTES / (1024 * 1024),
+    })
+}
+
+async fn admin_create(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+    let mut title = String::new();
+    let mut slug = String::new();
+    let mut description = String::new();
+    let mut queue_transcription = false;
+    let mut audio_filename: Option<String> = None;
+    let mut audio_path_on_disk: Option<PathBuf> = None;
+    let mut audio_mime: Option<String> = None;
+    let mut audio_size: u64 = 0;
+    let now = unix_now();
+
+    if let Err(e) = std::fs::create_dir_all(state.audio_dir.as_ref()) {
+        return new_form_error(&format!("Could not prepare audio directory: {}", e));
+    }
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return new_form_error(&format!("Multipart error: {}", e)),
+        };
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "title" => title = field.text().await.unwrap_or_default(),
+            "slug" => slug = field.text().await.unwrap_or_default(),
+            "description" => description = field.text().await.unwrap_or_default(),
+            "queue_transcription" => queue_transcription = true,
+            "audio" => {
+                let original = field.file_name().unwrap_or("upload.bin").to_string();
+                let mime = field
+                    .content_type()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "audio/mpeg".into());
+                // Buffer the whole field in memory, then write to disk in one go.
+                // Bounded by the route-level DefaultBodyLimit (MAX_UPLOAD_BYTES).
+                let bytes = match field.bytes().await {
+                    Ok(b) => b,
+                    Err(e) => return new_form_error(&format!("Upload read error: {}", e)),
+                };
+                let safe_filename = format!("{}-{}", now, sanitize_filename(&original));
+                let mut full = state.audio_dir.as_ref().clone();
+                full.push(&safe_filename);
+                let mut file = match tokio::fs::File::create(&full).await {
+                    Ok(f) => f,
+                    Err(e) => return new_form_error(&format!("Could not write audio file: {}", e)),
+                };
+                if let Err(e) = file.write_all(&bytes).await {
+                    return new_form_error(&format!("Disk write error: {}", e));
+                }
+                let _ = file.flush().await;
+                audio_filename = Some(original);
+                audio_path_on_disk = Some(full);
+                audio_mime = Some(mime);
+                audio_size = bytes.len() as u64;
+            }
+            _ => {
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    let title = title.trim().to_string();
+    let slug = slug.trim().to_string();
+    if title.is_empty() {
+        return new_form_error("Title is required.");
+    }
+    if slug.is_empty() {
+        return new_form_error("Slug is required.");
+    }
+    let audio_path = match audio_path_on_disk {
+        Some(p) => p,
+        None => return new_form_error("Audio file is required."),
+    };
+    if audio_size == 0 {
+        let _ = std::fs::remove_file(&audio_path);
+        return new_form_error("The audio file was empty.");
+    }
+
+    let mut episode = PodcastEpisode {
+        id: now,
+        slug,
+        title,
+        description,
+        audio_path: audio_path.to_string_lossy().to_string(),
+        mime_type: audio_mime.unwrap_or_else(|| "audio/mpeg".into()),
+        size_bytes: audio_size,
+        duration_seconds: 0,
+        status: EpisodeStatus::Draft,
+        created_at: now,
+        updated_at: now,
+        published_at: None,
+        transcript_job_id: None,
+    };
+
+    // Optional Whisper integration: queue a transcription job that points
+    // at the just-saved file. Whisper plugin's worker will pick it up.
+    if queue_transcription {
+        let job = TranscriptionJob {
+            id: now + 1, // distinct from episode id; same timeline
+            audio_path: episode.audio_path.clone(),
+            status: TranscriptionStatus::Queued,
+            language: "auto".into(),
+            model: "base".into(),
+            transcript: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        };
+        if state.db.upsert_transcription_job(&job).is_ok() {
+            episode.transcript_job_id = Some(job.id);
+        }
+    }
+
+    if let Err(e) = state.db.upsert_podcast_episode(&episode) {
+        let _ = std::fs::remove_file(&episode.audio_path);
+        return new_form_error(&format!("Could not save episode: {}", e));
+    }
+
+    let _ = audio_filename; // kept for future "original filename" surfacing
+    Redirect::to("/admin/podcasts").into_response()
+}
+
+#[derive(Template)]
+#[template(path = "admin_edit.html")]
+struct AdminEditPage<'a> {
+    id: u64,
+    title: String,
+    slug: String,
+    description: String,
+    status_str: &'static str,
+    audio_path: String,
+    mime_type: String,
+    size_human: String,
+    created_human: String,
+    updated_human: String,
+    transcript_job_id: Option<u64>,
+    error: Option<&'a str>,
+}
+
+async fn admin_edit_form(State(state): State<AppState>, Path(id): Path<u64>) -> Response {
+    let ep = match state.db.get_podcast_episode(id) {
+        Ok(Some(e)) => e,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    render(AdminEditPage {
+        id: ep.id,
+        title: ep.title,
+        slug: ep.slug,
+        description: ep.description,
+        status_str: ep.status.as_str(),
+        audio_path: ep.audio_path,
+        mime_type: ep.mime_type,
+        size_human: human_bytes(ep.size_bytes),
+        created_human: format_unix(ep.created_at),
+        updated_human: format_unix(ep.updated_at),
+        transcript_job_id: ep.transcript_job_id,
+        error: None,
+    })
+}
+
+#[derive(Deserialize)]
+struct EditForm {
+    title: String,
+    slug: String,
+    description: String,
+    status: String,
+}
+
+async fn admin_update(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Form(form): Form<EditForm>,
+) -> Response {
+    let mut ep = match state.db.get_podcast_episode(id) {
+        Ok(Some(e)) => e,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let now = unix_now();
+    let new_status = EpisodeStatus::from_form(&form.status);
+    let was_published = ep.status == EpisodeStatus::Published;
+    ep.title = form.title.trim().to_string();
+    ep.slug = form.slug.trim().to_string();
+    ep.description = form.description;
+    ep.status = new_status;
+    ep.updated_at = now;
+    if new_status == EpisodeStatus::Published && !was_published {
+        ep.published_at = Some(now);
+    } else if new_status == EpisodeStatus::Draft {
+        ep.published_at = None;
+    }
+    if let Err(e) = state.db.upsert_podcast_episode(&ep) {
+        return render(AdminEditPage {
+            id: ep.id,
+            title: ep.title,
+            slug: ep.slug,
+            description: ep.description,
+            status_str: ep.status.as_str(),
+            audio_path: ep.audio_path,
+            mime_type: ep.mime_type,
+            size_human: human_bytes(ep.size_bytes),
+            created_human: format_unix(ep.created_at),
+            updated_human: format_unix(ep.updated_at),
+            transcript_job_id: ep.transcript_job_id,
+            error: Some(&format!("Could not save: {}", e)),
+        });
+    }
+    Redirect::to("/admin/podcasts").into_response()
+}
+
+async fn admin_delete(State(state): State<AppState>, Path(id): Path<u64>) -> Response {
+    if let Ok(Some(ep)) = state.db.get_podcast_episode(id) {
+        let _ = std::fs::remove_file(&ep.audio_path);
+    }
+    let _ = state.db.delete_podcast_episode(id);
+    Redirect::to("/admin/podcasts").into_response()
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+fn render<T: Template>(tmpl: T) -> Response {
+    match tmpl.render() {
+        Ok(html) => Html(html).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+fn new_form_error(msg: &str) -> Response {
+    render(AdminNewPage {
+        error: Some(msg),
+        max_mb: MAX_UPLOAD_BYTES / (1024 * 1024),
+    })
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    if cleaned.is_empty() {
+        "audio.bin".into()
+    } else {
+        cleaned
+    }
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn human_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+fn format_duration(seconds: u64) -> String {
+    let h = seconds / 3600;
+    let m = (seconds % 3600) / 60;
+    let s = seconds % 60;
+    if h > 0 {
+        format!("{}:{:02}:{:02}", h, m, s)
+    } else {
+        format!("{:02}:{:02}", m, s)
+    }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn format_unix(ts: u64) -> String {
+    let (y, mo, d, h, mi) = unix_to_ymdhm(ts);
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", y, mo, d, h, mi)
+}
+
+fn rfc2822_utc(ts: u64) -> String {
+    let (y, mo, d, h, mi) = unix_to_ymdhm(ts);
+    let s = (ts % 60) as u32;
+    let weekday = weekday_short(y, mo, d);
+    let month = month_short(mo);
+    format!(
+        "{}, {:02} {} {:04} {:02}:{:02}:{:02} +0000",
+        weekday, d, month, y, h, mi, s
+    )
+}
+
+fn weekday_short(y: u32, m: u32, d: u32) -> &'static str {
+    let (y2, m2) = if m < 3 { (y - 1, m + 12) } else { (y, m) };
+    let k = y2 % 100;
+    let j = y2 / 100;
+    let h = (d as i32
+        + ((13 * (m2 + 1) as i32) / 5)
+        + k as i32
+        + (k as i32) / 4
+        + (j as i32) / 4
+        + 5 * j as i32)
+        .rem_euclid(7);
+    match h {
+        0 => "Sat",
+        1 => "Sun",
+        2 => "Mon",
+        3 => "Tue",
+        4 => "Wed",
+        5 => "Thu",
+        _ => "Fri",
+    }
+}
+
+fn month_short(m: u32) -> &'static str {
+    match m {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        _ => "Dec",
+    }
+}
+
+fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
+    let minutes_total = secs / 60;
+    let hours_total = minutes_total / 60;
+    let days_since_epoch = (hours_total / 24) as u32;
+    let minute = (minutes_total % 60) as u32;
+    let hour = (hours_total % 24) as u32;
+    let mut year = 1970u32;
+    let mut days_remaining = days_since_epoch;
+    loop {
+        let in_year = if is_leap(year) { 366 } else { 365 };
+        if days_remaining < in_year {
+            break;
+        }
+        days_remaining -= in_year;
+        year += 1;
+    }
+    let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = if is_leap(year) { months_leap } else { months_normal };
+    let mut month = 1u32;
+    for &len in &months {
+        if days_remaining < len {
+            break;
+        }
+        days_remaining -= len;
+        month += 1;
+    }
+    let day = days_remaining + 1;
+    (year, month, day, hour, minute)
+}
+
+fn is_leap(y: u32) -> bool {
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }

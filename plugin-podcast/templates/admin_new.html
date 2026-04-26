@@ -1,0 +1,46 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Upload episode — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Upload episode</h1>
+  <p class="cms-page__lede">Drop an audio file to create a draft episode.</p>
+</header>
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/podcasts/new" enctype="multipart/form-data" class="cms-form" style="max-width:680px">
+  <label class="cms-field">
+    <span class="cms-field__label">Title</span>
+    <input class="cms-field__input" type="text" name="title" required autofocus>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Slug</span>
+    <input class="cms-field__input" type="text" name="slug" required pattern="[a-z0-9-]+"
+           title="Lowercase letters, digits, and hyphens only.">
+    <span class="cms-field__hint">Public URL becomes <code>/podcasts/&lt;slug&gt;</code>.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Description</span>
+    <textarea class="cms-field__input" name="description" rows="6"></textarea>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Audio file</span>
+    <input class="cms-field__input" type="file" name="audio" required accept="audio/*">
+    <span class="cms-field__hint">MP3, M4A, AAC, OGG. Up to {{ max_mb }} MB.</span>
+  </label>
+  <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+    <input type="checkbox" name="queue_transcription" value="1" checked>
+    <span>Queue transcription with the Whisper plugin (optional).</span>
+  </label>
+  <div style="display:flex; gap:8px;">
+    <button class="cms-btn cms-btn--primary" type="submit">Upload as draft</button>
+    <a class="cms-btn" href="/admin/podcasts" style="display:inline-flex; align-items:center; padding:10px 16px;">Cancel</a>
+  </div>
+</form>
+{% endblock %}
