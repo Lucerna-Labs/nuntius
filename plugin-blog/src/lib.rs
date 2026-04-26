@@ -18,7 +18,7 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError};
 use ccc_database::{BlogPost, CccDB, PostStatus};
 use serde::Deserialize;
 use std::any::Any;
@@ -43,11 +43,11 @@ impl Plugin for StaticBlogPlugin {
     }
 
     fn routes(&self, ctx: &AppContext) -> Option<Router> {
-        Some(public_router(ctx.db.clone()))
+        Some(public_router(ctx.db.clone(), ctx.events.clone()))
     }
 
     fn admin_routes(&self, ctx: &AppContext) -> Option<Router> {
-        Some(admin_router(ctx.db.clone()))
+        Some(admin_router(ctx.db.clone(), ctx.events.clone()))
     }
 
     fn admin_nav(&self, _ctx: &AppContext) -> Vec<AdminNavEntry> {
@@ -71,13 +71,14 @@ impl Plugin for StaticBlogPlugin {
 #[derive(Clone)]
 struct AppState {
     db: Arc<CccDB>,
+    events: Arc<EventBus>,
 }
 
-fn public_router(db: Arc<CccDB>) -> Router {
+fn public_router(db: Arc<CccDB>, events: Arc<EventBus>) -> Router {
     Router::new()
         .route("/blog/", get(public_index))
         .route("/blog/:slug", get(public_show))
-        .with_state(AppState { db })
+        .with_state(AppState { db, events })
 }
 
 #[derive(Template)]
@@ -133,7 +134,7 @@ async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) ->
 // Admin routes (mounted under /admin)
 // ============================================================================
 
-fn admin_router(db: Arc<CccDB>) -> Router {
+fn admin_router(db: Arc<CccDB>, events: Arc<EventBus>) -> Router {
     // Paths are *relative* to the /admin nest prefix the CMS owns.
     // The full URL becomes /admin/blog/posts etc.
     Router::new()
@@ -144,7 +145,7 @@ fn admin_router(db: Arc<CccDB>) -> Router {
             get(admin_edit_form).post(admin_update),
         )
         .route("/blog/posts/:id/delete", post(admin_delete))
-        .with_state(AppState { db })
+        .with_state(AppState { db, events })
 }
 
 #[derive(Template)]
@@ -249,7 +250,30 @@ async fn admin_create(State(state): State<AppState>, Form(form): Form<PostForm>)
             None
         },
     };
-    save_or_re_render(&state, post, "/admin/blog/posts", "New post").await
+    match state.db.upsert_blog_post(&post) {
+        Ok(()) => {
+            if status == PostStatus::Published {
+                state
+                    .events
+                    .publish(Event::BlogPostPublished { id: post.id });
+            }
+            Redirect::to("/admin/blog/posts").into_response()
+        }
+        Err(e) => render_create_error(post, format!("Could not save: {}", e)),
+    }
+}
+
+fn render_create_error(post: BlogPost, msg: String) -> Response {
+    render(AdminEditPage {
+        heading: "New post",
+        form_action: "/admin/blog/posts".into(),
+        title: post.title.clone(),
+        slug: post.slug.clone(),
+        slug_or_placeholder: post.slug,
+        content: post.content,
+        status_str: post.status.as_str(),
+        error: Some(&msg),
+    })
 }
 
 async fn admin_update(
@@ -276,7 +300,13 @@ async fn admin_update(
     } else if new_status == PostStatus::Draft {
         prev.published_at = None;
     }
-    save_or_re_render(&state, prev, "/admin/blog/posts", "Edit post").await
+    let response = save_or_re_render(&state, prev.clone(), "/admin/blog/posts", "Edit post").await;
+    // Emit event only on the Draft -> Published transition. (Re-saving an
+    // already-published post does not re-trigger newsletters.)
+    if new_status == PostStatus::Published && !was_already_published {
+        state.events.publish(Event::BlogPostPublished { id });
+    }
+    response
 }
 
 async fn save_or_re_render(

@@ -4,7 +4,7 @@
 //! automate the high-performance Creator Command Center (CCC) server.
 
 use clap::{Parser, Subcommand};
-use ccc_core::{AppContext, CccConfig, PluginManager};
+use ccc_core::{AppContext, CccConfig, EventBus, PluginManager};
 use ccc_database::CccDB;
 use ccc_radio_engine::{RadioEnginePlugin, StreamingProtocol};
 use std::path::PathBuf;
@@ -87,7 +87,10 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
             std::process::exit(1);
         }
     };
-    let ctx = AppContext { db };
+    let ctx = AppContext {
+        db,
+        events: Arc::new(EventBus::new()),
+    };
 
     let mut manager = PluginManager::new();
     for name in &cfg.plugins.enabled {

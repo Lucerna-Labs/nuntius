@@ -13,6 +13,50 @@ use ccc_database::CccDB;
 use std::any::Any;
 use std::sync::Arc;
 
+/// Cross-plugin events. Adding variants is non-breaking — subscribers
+/// pattern-match and ignore unknown variants.
+#[derive(Clone, Debug)]
+pub enum Event {
+    /// A blog post just transitioned to the Published state.
+    BlogPostPublished { id: u64 },
+    /// A podcast episode just transitioned to the Published state.
+    PodcastEpisodePublished { id: u64 },
+    /// A video podcast episode just transitioned to the Published state.
+    VideoPodcastPublished { id: u64 },
+}
+
+/// In-process event bus. Wraps a `tokio::sync::broadcast::Sender` so any
+/// plugin can publish; any plugin that calls `subscribe()` receives every
+/// future event. The CLI builds one at startup and shares it via
+/// `AppContext::events`.
+pub struct EventBus {
+    sender: tokio::sync::broadcast::Sender<Event>,
+}
+
+impl EventBus {
+    pub fn new() -> Self {
+        let (sender, _) = tokio::sync::broadcast::channel(256);
+        Self { sender }
+    }
+
+    /// Best-effort publish. If there are no subscribers the send simply
+    /// returns Err; we ignore it on purpose so plugins don't have to
+    /// know whether anyone is listening.
+    pub fn publish(&self, event: Event) {
+        let _ = self.sender.send(event);
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Event> {
+        self.sender.subscribe()
+    }
+}
+
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Shared runtime context handed to every enabled plugin.
 ///
 /// This is the single dependency injection seam between the host and plugins.
@@ -21,6 +65,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct AppContext {
     pub db: Arc<CccDB>,
+    pub events: Arc<EventBus>,
 }
 
 /// A sidebar entry a plugin contributes to the CMS admin shell.

@@ -41,6 +41,21 @@
     <span class="cms-field__label">From name</span>
     <input class="cms-field__input" type="text" name="from_name" value="{{ from_name }}" required>
   </label>
+
+  <hr style="border: none; border-top: 1px solid var(--border); margin: 16px 0;">
+  <h2 style="margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);">Auto-send</h2>
+
+  <label style="display:flex; gap:8px; align-items:flex-start; padding:6px 0;">
+    <input type="checkbox" name="auto_send_blog_posts" value="1" {% if auto_send_blog_posts %}checked{% endif %} style="margin-top: 4px;">
+    <span>Email subscribers automatically when a blog post is published.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Public site URL (for "Read more" links)</span>
+    <input class="cms-field__input" type="url" name="site_url" value="{{ site_url }}"
+           placeholder="https://your.host">
+    <span class="cms-field__hint">Used only when auto-send is on. Leave blank if you don't have a public hostname yet.</span>
+  </label>
+
   <button class="cms-btn cms-btn--primary" type="submit">Save</button>
 </form>
 {% endblock %}

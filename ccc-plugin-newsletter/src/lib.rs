@@ -19,8 +19,8 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
-use ccc_database::{CccDB, Subscriber};
+use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError};
+use ccc_database::{CccDB, PostStatus, Subscriber};
 use lettre::message::{header::ContentType, Message};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::AsyncSmtpTransport;
@@ -43,6 +43,14 @@ pub struct NewsletterSettings {
     pub password: String,
     pub from_email: String,
     pub from_name: String,
+    /// When true, automatically email all active subscribers when a
+    /// blog post transitions Draft -> Published.
+    #[serde(default)]
+    pub auto_send_blog_posts: bool,
+    /// Public site URL used to build "Read more" links in auto-sent
+    /// emails. Falls back to `Reading on the web` if blank.
+    #[serde(default)]
+    pub site_url: String,
 }
 
 impl Default for NewsletterSettings {
@@ -54,6 +62,8 @@ impl Default for NewsletterSettings {
             password: String::new(),
             from_email: String::new(),
             from_name: "Creator Command Center".into(),
+            auto_send_blog_posts: false,
+            site_url: String::new(),
         }
     }
 }
@@ -168,6 +178,12 @@ impl Plugin for CccPluginNewsletterPlugin {
     }
 
     fn admin_routes(&self, ctx: &AppContext) -> Option<Router> {
+        let admin_state = AdminState {
+            db: ctx.db.clone(),
+            settings: self.settings.clone(),
+        };
+        // Spawn the cross-plugin event subscriber once, idempotently.
+        spawn_event_listener(admin_state.clone(), ctx.events.clone());
         Some(
             Router::new()
                 .route("/newsletter", get(admin_list))
@@ -178,10 +194,7 @@ impl Plugin for CccPluginNewsletterPlugin {
                     get(admin_settings_get).post(admin_settings_post),
                 )
                 .route("/newsletter/:id/delete", post(admin_delete))
-                .with_state(AdminState {
-                    db: ctx.db.clone(),
-                    settings: self.settings.clone(),
-                }),
+                .with_state(admin_state),
         )
     }
 
@@ -197,6 +210,123 @@ impl Plugin for CccPluginNewsletterPlugin {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+// ============================================================================
+// Cross-plugin event listener (Blog -> auto newsletter)
+// ============================================================================
+
+fn spawn_event_listener(state: AdminState, events: Arc<EventBus>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SPAWNED: AtomicBool = AtomicBool::new(false);
+    if SPAWNED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let mut rx = events.subscribe();
+    tokio::spawn(async move {
+        loop {
+            let event = match rx.recv().await {
+                Ok(e) => e,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            if let Event::BlogPostPublished { id } = event {
+                handle_blog_published(&state, id).await;
+            }
+        }
+    });
+}
+
+async fn handle_blog_published(state: &AdminState, post_id: u64) {
+    let snap = state.settings.snapshot();
+    if !snap.auto_send_blog_posts {
+        return;
+    }
+    if snap.host.is_empty() || snap.from_email.is_empty() {
+        eprintln!(
+            "[newsletter] auto-send skipped for blog post {}: SMTP not configured",
+            post_id
+        );
+        return;
+    }
+    let post = match state.db.get_blog_post(post_id) {
+        Ok(Some(p)) if p.status == PostStatus::Published => p,
+        Ok(_) => return,
+        Err(e) => {
+            eprintln!("[newsletter] could not load blog post {}: {}", post_id, e);
+            return;
+        }
+    };
+    let recipients: Vec<Subscriber> = state
+        .db
+        .all_subscribers()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.active)
+        .collect();
+    if recipients.is_empty() {
+        return;
+    }
+
+    let mailer = match build_mailer(&snap) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[newsletter] auto-send mailer build failed: {}", e);
+            return;
+        }
+    };
+
+    let from = format!("{} <{}>", snap.from_name, snap.from_email);
+    let subject = format!("New post: {}", post.title);
+    let read_more = if snap.site_url.is_empty() {
+        format!("/blog/{}", post.slug)
+    } else {
+        format!("{}/blog/{}", snap.site_url.trim_end_matches('/'), post.slug)
+    };
+    let body = format!(
+        "{}\n\nRead more: {}\n\n--\nYou're receiving this because you subscribed.",
+        post.content, read_more
+    );
+
+    let mut sent = 0usize;
+    let mut failed = 0usize;
+    for sub in &recipients {
+        let to = match sub.email.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                failed += 1;
+                continue;
+            }
+        };
+        let from_parsed = match from.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                failed += 1;
+                continue;
+            }
+        };
+        let msg = match Message::builder()
+            .from(from_parsed)
+            .to(to)
+            .subject(&subject)
+            .header(ContentType::TEXT_PLAIN)
+            .body(body.clone())
+        {
+            Ok(m) => m,
+            Err(_) => {
+                failed += 1;
+                continue;
+            }
+        };
+        match mailer.send(msg).await {
+            Ok(_) => sent += 1,
+            Err(_) => failed += 1,
+        }
+    }
+    println!(
+        "[newsletter] auto-send for post {} ('{}'): sent={} failed={}",
+        post_id, post.title, sent, failed
+    );
 }
 
 // ============================================================================
@@ -461,6 +591,8 @@ struct AdminSettingsPage {
     password: String,
     from_email: String,
     from_name: String,
+    auto_send_blog_posts: bool,
+    site_url: String,
     saved: Option<bool>,
 }
 
@@ -473,6 +605,8 @@ async fn admin_settings_get(State(state): State<AdminState>) -> Response {
         password: s.password,
         from_email: s.from_email,
         from_name: s.from_name,
+        auto_send_blog_posts: s.auto_send_blog_posts,
+        site_url: s.site_url,
         saved: None,
     })
 }
@@ -485,6 +619,10 @@ struct SettingsForm {
     password: String,
     from_email: String,
     from_name: String,
+    #[serde(default)]
+    auto_send_blog_posts: Option<String>,
+    #[serde(default)]
+    site_url: String,
 }
 
 async fn admin_settings_post(
@@ -498,6 +636,8 @@ async fn admin_settings_post(
         password: form.password,
         from_email: form.from_email.trim().to_string(),
         from_name: form.from_name.trim().to_string(),
+        auto_send_blog_posts: form.auto_send_blog_posts.is_some(),
+        site_url: form.site_url.trim().to_string(),
     };
     let _ = state.settings.replace(new);
     Redirect::to("/admin/newsletter/settings?saved=1").into_response()
