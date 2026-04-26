@@ -13,6 +13,7 @@ whisper.toml
 s3.toml
 newsletter.toml
 seo.toml
+patreon.toml
 
 # Local logs from cargo runs we kept while bootstrapping
 cargo-check.log

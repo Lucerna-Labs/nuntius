@@ -1,0 +1,56 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Patreon — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Patreon connection</h1>
+  <p class="cms-page__lede">Let listeners log in with Patreon to unlock subscriber-only feeds.</p>
+</header>
+
+{% match saved %}
+  {% when Some with (_) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">Saved.</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/patreon" class="cms-form" style="max-width:640px">
+  <label class="cms-field">
+    <span class="cms-field__label">Client ID</span>
+    <input class="cms-field__input" type="text" name="client_id" value="{{ client_id }}" autocomplete="off">
+    <span class="cms-field__hint">From your Patreon API client settings.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Client secret</span>
+    <input class="cms-field__input" type="password" name="client_secret" value="{{ client_secret }}" autocomplete="new-password">
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Redirect URI</span>
+    <input class="cms-field__input" type="url" name="redirect_uri" value="{{ redirect_uri }}"
+           placeholder="https://your.host/patreon/callback">
+    <span class="cms-field__hint">Add this exact URL in your Patreon API client. Must match.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Required tier ID (optional)</span>
+    <input class="cms-field__input" type="text" name="required_tier_id" value="{{ required_tier_id }}">
+    <span class="cms-field__hint">If set, only patrons entitled to this tier are treated as members.</span>
+  </label>
+  <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Public endpoints</h3>
+  <ul class="cms-rail__list">
+    <li><a href="/patreon">/patreon</a> — status page (login button or current patron info)</li>
+    <li><code>/patreon/login</code> → redirects to Patreon</li>
+    <li><code>/patreon/callback</code> ← Patreon sends users back here</li>
+    <li><code>/patreon/logout</code></li>
+  </ul>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Status</h3>
+  <p>{% if configured %}<strong>Configured.</strong>{% else %}<strong>Not configured.</strong> The login flow won't work until credentials are saved.{% endif %}</p>
+</div>
+{% endblock %}
