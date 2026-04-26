@@ -23,6 +23,21 @@ pub struct AppContext {
     pub db: Arc<CccDB>,
 }
 
+/// A sidebar entry a plugin contributes to the CMS admin shell.
+///
+/// `icon` is rendered as-is into the template; for now any string the
+/// shell template accepts works (emoji, single character, future-proof
+/// for SVG sprites). Keep labels short — they live in the left rail.
+#[derive(Clone, Debug)]
+pub struct AdminNavEntry {
+    pub label: &'static str,
+    pub href: String,
+    pub icon: &'static str,
+    /// Lower numbers sort first. Pick a stable value per plugin so the
+    /// nav order stays predictable across rebuilds.
+    pub sort: i32,
+}
+
 /// A trait that all plugins must implement to hook into the Creator Command Center (CCC) core.
 ///
 /// **Lifecycle contract:** if a plugin is *disabled* in `ccc.toml`, it is
@@ -61,6 +76,17 @@ pub trait Plugin: Send + Sync {
     /// Default: no admin routes.
     fn admin_routes(&self, _ctx: &AppContext) -> Option<Router> {
         None
+    }
+
+    /// Sidebar entries this plugin contributes to the CMS admin shell.
+    ///
+    /// Returned per-plugin and merged by `PluginManager::merged_admin_nav`.
+    /// The CMS dashboard renders them in the left nav, sorted by
+    /// `AdminNavEntry::sort`.
+    ///
+    /// Default: no entries.
+    fn admin_nav(&self, _ctx: &AppContext) -> Vec<AdminNavEntry> {
+        Vec::new()
     }
 
     /// Return an `Any` reference to allow downcasting if necessary for specific plugin interactions.
@@ -135,6 +161,15 @@ impl PluginManager {
             }
         }
         router
+    }
+
+    /// Collect every plugin's `admin_nav()` entries, sorted by their
+    /// declared `sort` value.
+    pub fn merged_admin_nav(&self, ctx: &AppContext) -> Vec<AdminNavEntry> {
+        let mut entries: Vec<AdminNavEntry> =
+            self.plugins.iter().flat_map(|p| p.admin_nav(ctx)).collect();
+        entries.sort_by_key(|e| (e.sort, e.label));
+        entries
     }
 
     /// Names of all registered (= enabled) plugins.

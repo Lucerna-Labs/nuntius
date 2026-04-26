@@ -111,9 +111,17 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
     // routes from other plugins do not mount.
     if let Some(cms) = manager.find::<ccc_cms::CmsPlugin>() {
         let plugin_admin = manager.merged_admin_router(&ctx);
-        let admin_tree = ccc_cms::build_admin_tree(cms.store.clone(), plugin_admin);
+        let dashboard_ctx = ccc_cms::DashboardCtx {
+            store: cms.store.clone(),
+            nav: manager.merged_admin_nav(&ctx),
+            plugin_names: manager.names().iter().map(|s| s.to_string()).collect(),
+        };
+        let admin_tree = ccc_cms::build_admin_tree(dashboard_ctx, plugin_admin);
         app = app.merge(admin_tree);
-        println!("CMS enabled at /admin (sidecar: {})", cms.admin_store_path.display());
+        println!(
+            "CMS enabled at /admin (sidecar: {})",
+            cms.admin_store_path.display()
+        );
     }
 
     if let Err(e) = ccc_api::serve(&addr, app).await {

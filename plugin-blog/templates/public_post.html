@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} — Blog</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+  <style>
+    .blog-post { max-width: 720px; margin: 60px auto; padding: 0 24px; line-height: 1.65; }
+    .blog-post .meta { color: var(--text-dim); font-size: 13px; }
+    .blog-post img { max-width: 100%; }
+    .blog-post pre { background: var(--surface); padding: 12px; border-radius: 8px; overflow-x: auto; }
+    .blog-post code { background: var(--surface); padding: 1px 4px; border-radius: 3px; }
+  </style>
+</head>
+<body class="cms">
+  <main class="blog-post">
+    <p><a href="/blog/">← All posts</a></p>
+    <h1>{{ title }}</h1>
+    <p class="meta">{{ published_human }}</p>
+    <article>{{ rendered_html|safe }}</article>
+  </main>
+</body>
+</html>

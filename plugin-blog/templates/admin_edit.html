@@ -1,0 +1,63 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}{{ heading }} — Blog — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>{{ heading }}</h1>
+  {% match error %}
+    {% when Some with (msg) %}
+      <div class="cms-alert cms-alert--error">{{ msg }}</div>
+    {% when None %}
+  {% endmatch %}
+</header>
+
+<form method="post" action="{{ form_action }}" class="cms-form" style="max-width:780px">
+  <label class="cms-field">
+    <span class="cms-field__label">Title</span>
+    <input class="cms-field__input" type="text" name="title" required value="{{ title }}" autofocus>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Slug</span>
+    <input class="cms-field__input" type="text" name="slug" required value="{{ slug }}"
+           pattern="[a-z0-9-]+" title="Lowercase letters, digits, and hyphens only.">
+    <span class="cms-field__hint">Will appear as <code>/blog/{{ slug_or_placeholder }}</code> when published.</span>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Body (Markdown)</span>
+    <textarea class="cms-field__input" name="content" rows="18" required>{{ content }}</textarea>
+  </label>
+
+  <fieldset class="cms-field">
+    <legend class="cms-field__label">Status</legend>
+    <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+      <input type="radio" name="status" value="draft" {% if status_str == "draft" %}checked{% endif %}>
+      <span>Draft — only visible here in admin.</span>
+    </label>
+    <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+      <input type="radio" name="status" value="published" {% if status_str == "published" %}checked{% endif %}>
+      <span>Published — live on your public blog.</span>
+    </label>
+  </fieldset>
+
+  <div style="display:flex; gap:8px;">
+    <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+    <a class="cms-btn" href="/admin/blog/posts" style="display:inline-flex; align-items:center; padding:10px 16px;">Cancel</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Markdown cheatsheet</h3>
+  <ul class="cms-rail__list" style="font-family:monospace; font-size:12px;">
+    <li># Heading</li>
+    <li>**bold**, *italic*</li>
+    <li>[link](https://...)</li>
+    <li>- list item</li>
+    <li>`inline code`</li>
+  </ul>
+</div>
+{% endblock %}

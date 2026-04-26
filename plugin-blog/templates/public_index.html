@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blog — Creator Command Center</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+  <style>
+    .blog-public { max-width: 720px; margin: 60px auto; padding: 0 24px; }
+    .blog-public__post { padding: 16px 0; border-bottom: 1px solid var(--border); }
+    .blog-public__post h2 { margin: 0 0 4px; }
+    .blog-public__post .meta { color: var(--text-dim); font-size: 13px; }
+  </style>
+</head>
+<body class="cms">
+  <main class="blog-public">
+    <h1>Blog</h1>
+    {% if posts.is_empty() %}
+      <p>No posts published yet.</p>
+    {% else %}
+      {% for p in posts %}
+        <article class="blog-public__post">
+          <h2><a href="/blog/{{ p.slug }}">{{ p.title }}</a></h2>
+          <p class="meta">{{ p.published_human }}</p>
+        </article>
+      {% endfor %}
+    {% endif %}
+  </main>
+</body>
+</html>

@@ -2,7 +2,7 @@
 // `redb::Error` is ~160 bytes; clippy::result_large_err is upstream-driven and
 // not actionable without wrapping every call site.
 
-use redb::{Database, Error, TableDefinition};
+use redb::{Database, Error, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 
 /// The main table where raw blog posts are stored.
@@ -10,10 +10,14 @@ use serde::{Deserialize, Serialize};
 /// Value: Serialized BlogPost
 const BLOG_POSTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("blog_posts");
 
-/// The custom index table for quickly querying the latest blog posts.
-/// Key: Composite string of `[timestamp]_[post_id]`
+/// Chronological index of *Published* blog posts only (drafts are excluded
+/// so the public reader doesn't leak unpublished work).
+/// Key: `[zero-padded published_at]_[post_id]`
 /// Value: Post ID (u64)
 const BLOG_POSTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new("blog_posts_chrono");
+
+/// Slug → ID lookup. Slugs must be unique across all posts (drafts included).
+const BLOG_POSTS_SLUG_INDEX: TableDefinition<&str, u64> = TableDefinition::new("blog_posts_slug");
 
 /// The main table where tracks are stored.
 /// Key: Track ID (u64)
@@ -40,14 +44,49 @@ const VIDEO_PODCASTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("
 /// Value: Video ID (u64)
 const VIDEO_PODCASTS_CHRONO_INDEX: TableDefinition<&str, u64> = TableDefinition::new("video_podcasts_chrono");
 
-/// Example struct for a Blog Post
+/// Publication state of a blog post.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PostStatus {
+    #[default]
+    Draft,
+    Published,
+}
+
+impl PostStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PostStatus::Draft => "draft",
+            PostStatus::Published => "published",
+        }
+    }
+
+    pub fn from_form(s: &str) -> Self {
+        match s {
+            "published" => PostStatus::Published,
+            _ => PostStatus::Draft,
+        }
+    }
+}
+
+/// A blog post.
+///
+/// `slug` is the URL fragment under `/blog/:slug`; it must be unique
+/// per published post (enforced at write time).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlogPost {
     pub id: u64,
+    pub slug: String,
     pub title: String,
+    /// Markdown body.
     pub content: String,
-    /// Unix timestamp
-    pub timestamp: u64,
+    pub status: PostStatus,
+    /// Unix seconds when the row was first created.
+    pub created_at: u64,
+    /// Unix seconds when the row was last edited.
+    pub updated_at: u64,
+    /// Unix seconds of the most recent transition to Published, if any.
+    /// Drives the chronological index used by `/blog/`.
+    pub published_at: Option<u64>,
 }
 
 /// Example struct for a Radio Track
@@ -96,6 +135,7 @@ impl CccDB {
         {
             write_txn.open_table(BLOG_POSTS_TABLE)?;
             write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
+            write_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
             write_txn.open_table(TRACKS_TABLE)?;
             write_txn.open_table(PODCASTS_TABLE)?;
             write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
@@ -109,42 +149,131 @@ impl CccDB {
 
     // --- BLOG POSTS ---
 
-    /// Insert a blog post and update the chronological index.
-    pub fn insert_blog_post(&self, post: &BlogPost) -> Result<(), Error> {
+    fn chrono_key(published_at: u64, id: u64) -> String {
+        format!("{:020}_{}", published_at, id)
+    }
+
+    /// Insert or update a blog post. Maintains slug uniqueness (rejects
+    /// inserts whose slug is taken by another id) and keeps the chrono
+    /// index synchronized with `status`: Published posts are indexed,
+    /// Drafts are not.
+    pub fn upsert_blog_post(&self, post: &BlogPost) -> Result<(), Error> {
         let write_txn = self.db.begin_write()?;
         {
             let mut main_table = write_txn.open_table(BLOG_POSTS_TABLE)?;
-            let mut index_table = write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
+            let mut chrono_table = write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
+            let mut slug_table = write_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
+
+            // Slug uniqueness: if some other id already owns this slug, refuse.
+            if let Some(existing_id) = slug_table.get(post.slug.as_str())? {
+                if existing_id.value() != post.id {
+                    return Err(Error::Corrupted(format!(
+                        "blog slug '{}' already in use by post {}",
+                        post.slug,
+                        existing_id.value()
+                    )));
+                }
+            }
+
+            // Drop any stale row+indexes for this id (handles slug renames
+            // and status flips cleanly).
+            if let Some(prev_raw) = main_table.get(post.id)? {
+                let prev: BlogPost = bincode::deserialize(prev_raw.value()).unwrap();
+                if prev.slug != post.slug {
+                    slug_table.remove(prev.slug.as_str())?;
+                }
+                if let Some(ts) = prev.published_at {
+                    chrono_table.remove(Self::chrono_key(ts, prev.id).as_str())?;
+                }
+            }
 
             let encoded: Vec<u8> = bincode::serialize(post).unwrap();
             main_table.insert(post.id, encoded.as_slice())?;
+            slug_table.insert(post.slug.as_str(), post.id)?;
 
-            let chrono_key = format!("{:020}_{}", post.timestamp, post.id);
-            index_table.insert(chrono_key.as_str(), post.id)?;
+            if post.status == PostStatus::Published {
+                if let Some(ts) = post.published_at {
+                    chrono_table.insert(Self::chrono_key(ts, post.id).as_str(), post.id)?;
+                }
+            }
         }
         write_txn.commit()?;
         Ok(())
     }
 
-    /// Retrieve the `limit` most recent blog posts using the custom index.
-    pub fn get_latest_blog_posts(&self, limit: usize) -> Result<Vec<BlogPost>, Error> {
+    /// Delete a blog post and clean up its index entries.
+    pub fn delete_blog_post(&self, id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut main_table = write_txn.open_table(BLOG_POSTS_TABLE)?;
+            let mut chrono_table = write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
+            let mut slug_table = write_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
+
+            if let Some(prev_raw) = main_table.get(id)? {
+                let prev: BlogPost = bincode::deserialize(prev_raw.value()).unwrap();
+                slug_table.remove(prev.slug.as_str())?;
+                if let Some(ts) = prev.published_at {
+                    chrono_table.remove(Self::chrono_key(ts, prev.id).as_str())?;
+                }
+            }
+            main_table.remove(id)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Single post by id. Returns None if not found.
+    pub fn get_blog_post(&self, id: u64) -> Result<Option<BlogPost>, Error> {
         let read_txn = self.db.begin_read()?;
-        let index_table = read_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
+        let table = read_txn.open_table(BLOG_POSTS_TABLE)?;
+        Ok(table.get(id)?.map(|raw| bincode::deserialize(raw.value()).unwrap()))
+    }
+
+    /// Single post by slug.
+    pub fn get_blog_post_by_slug(&self, slug: &str) -> Result<Option<BlogPost>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let slug_table = read_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
         let main_table = read_txn.open_table(BLOG_POSTS_TABLE)?;
 
-        let mut results = Vec::new();
+        let id = match slug_table.get(slug)? {
+            Some(v) => v.value(),
+            None => return Ok(None),
+        };
+        Ok(main_table
+            .get(id)?
+            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+    }
 
-        for item in index_table.range("0"..="9").unwrap().rev().take(limit) {
-            let (_, post_id) = item.unwrap();
-            let post_id_val = post_id.value();
+    /// Most-recent Published posts for the public reader.
+    pub fn latest_published_blog_posts(&self, limit: usize) -> Result<Vec<BlogPost>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let chrono_table = read_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
+        let main_table = read_txn.open_table(BLOG_POSTS_TABLE)?;
 
-            if let Some(encoded) = main_table.get(post_id_val)? {
-                let post: BlogPost = bincode::deserialize(encoded.value()).unwrap();
-                results.push(post);
+        let mut out = Vec::new();
+        for item in chrono_table.range("0"..="9")?.rev().take(limit) {
+            let (_, id) = item?;
+            if let Some(raw) = main_table.get(id.value())? {
+                out.push(bincode::deserialize(raw.value()).unwrap());
             }
         }
+        Ok(out)
+    }
 
-        Ok(results)
+    /// Every post (drafts + published), newest-row first by id.
+    /// Used by the admin list view.
+    pub fn all_blog_posts(&self) -> Result<Vec<BlogPost>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let main_table = read_txn.open_table(BLOG_POSTS_TABLE)?;
+
+        let mut out: Vec<BlogPost> = main_table
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
+            .collect();
+        // Newest first by updated_at.
+        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(out)
     }
 
     // --- PODCASTS ---

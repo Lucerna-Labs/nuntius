@@ -18,6 +18,7 @@ path = "ccc.redb"
 # plus the substantive content plugins. Add more as you flesh them out.
 enabled = [
     "cms",
+    "blog",
     "podcast",
     "video-podcast",
 ]

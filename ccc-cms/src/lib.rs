@@ -24,6 +24,7 @@ pub mod routes;
 pub mod templates;
 
 pub use auth::{AdminAccount, AdminStore, AuthError};
+pub use routes::{build_admin_tree, DashboardCtx};
 
 /// The CMS plugin.
 ///
@@ -104,4 +105,3 @@ impl Plugin for CmsPlugin {
     }
 }
 
-pub use routes::build_admin_tree;

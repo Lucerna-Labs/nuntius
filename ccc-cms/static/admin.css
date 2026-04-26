@@ -275,6 +275,48 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 }
 .cms-list__item:last-child { border-bottom: none; }
 
+/* === Tables === */
+.cms-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.cms-table th,
+.cms-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.cms-table th {
+  background: var(--surface-2);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.cms-table tr:last-child td { border-bottom: none; }
+
+.cms-badge {
+  display: inline-block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.cms-badge--draft { background: var(--surface-2); color: var(--text-dim); }
+.cms-badge--published { background: rgba(91, 158, 255, 0.18); color: var(--accent); }
+
+.cms-btn--danger {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+.cms-btn--danger:hover { filter: brightness(1.15); }
+
 /* === Right rail === */
 .cms-rail__card h3 {
   margin: 0 0 12px;

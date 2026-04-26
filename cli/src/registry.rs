@@ -23,7 +23,7 @@ pub fn register_by_name(
             manager.register(plugin)?;
         }
         "blog" => {
-            manager.register(ccc_plugin_blog::StaticBlogPlugin::default())?;
+            manager.register(ccc_plugin_blog::StaticBlogPlugin)?;
         }
         "podcast" => {
             // Plugin internally uses ctx.db at routes() time; db_path is informational.
