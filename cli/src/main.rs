@@ -3,7 +3,7 @@
 //! Designed for human operators and LLM agents to manage, configure, and
 //! automate the high-performance Creator Command Center (CCC) server.
 
-use ccc_core::{AppContext, CccConfig, EventBus, PluginManager};
+use ccc_core::{AppContext, CccConfig, EventBus, PluginManager, ServiceRegistry};
 use ccc_database::CccDB;
 use ccc_radio_engine::{RadioEnginePlugin, StreamingProtocol};
 use clap::{Parser, Subcommand};
@@ -90,6 +90,7 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
     let ctx = AppContext {
         db,
         events: Arc::new(EventBus::new()),
+        services: Arc::new(ServiceRegistry::new()),
     };
 
     let mut manager = PluginManager::new();

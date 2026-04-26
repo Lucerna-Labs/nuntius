@@ -1,14 +1,15 @@
-//! HTTP Signatures (draft-cavage v10) signer for outbound ActivityPub
-//! deliveries. We implement the producer side only — verifying incoming
-//! signatures is a follow-up. v1 trusts what comes in for the sake of
-//! shipping; in practice most Fediverse servers refuse to deliver
-//! activities to actors that don't present a signed `Accept`, so the
-//! producer side is what actually unblocks federation.
+//! HTTP Signatures (draft-cavage v10) — both producer and consumer.
+//!
+//! `sign_post` builds outbound `Signature:` headers; `verify_rsa_sha256`
+//! checks an incoming one against a public key fetched from the sender's
+//! actor URL. `body_digest` and `http_date` are utilities used by both
+//! sides. Signing/verification are RSA-SHA256 only — that's all the
+//! Fediverse uses in practice.
 
 use base64::Engine as _;
-use rsa::pkcs1v15::SigningKey;
+use rsa::pkcs1v15::{Signature, SigningKey, VerifyingKey};
 use rsa::sha2::Sha256;
-use rsa::signature::{RandomizedSigner, SignatureEncoding};
+use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier};
 use sha2::Digest;
 
 /// Compute the SHA-256 digest header value for a request body.
@@ -53,6 +54,125 @@ pub fn sign_post(
         "keyId=\"{}\",algorithm=\"rsa-sha256\",headers=\"(request-target) host date digest\",signature=\"{}\"",
         key_id, b64
     ))
+}
+
+/// Parsed pieces of an HTTP-Signature header.
+#[derive(Debug, Clone)]
+pub struct ParsedSignature {
+    pub key_id: String,
+    /// Optional: senders may declare `algorithm="rsa-sha256"` etc. We
+    /// hard-code RSA-SHA256 verification regardless, so we only parse
+    /// this for diagnostic logging if needed later.
+    #[allow(dead_code)]
+    pub algorithm: Option<String>,
+    pub headers: Vec<String>,
+    pub signature_b64: String,
+}
+
+/// Parse the comma-separated `key="value"` syntax of the `Signature:` header.
+pub fn parse_signature_header(header: &str) -> Option<ParsedSignature> {
+    let mut key_id = None;
+    let mut algorithm = None;
+    let mut headers = None;
+    let mut signature_b64 = None;
+    for kv in split_signature_params(header) {
+        let (k, v) = kv;
+        match k {
+            "keyId" => key_id = Some(v.to_string()),
+            "algorithm" => algorithm = Some(v.to_string()),
+            "headers" => headers = Some(v.split_whitespace().map(|s| s.to_string()).collect()),
+            "signature" => signature_b64 = Some(v.to_string()),
+            _ => {}
+        }
+    }
+    Some(ParsedSignature {
+        key_id: key_id?,
+        algorithm,
+        headers: headers.unwrap_or_else(|| vec!["date".into()]),
+        signature_b64: signature_b64?,
+    })
+}
+
+fn split_signature_params(header: &str) -> Vec<(&str, &str)> {
+    // Sample input: keyId="X",algorithm="rsa-sha256",headers="(request-target) host date digest",signature="..."
+    let mut out = Vec::new();
+    let mut rest = header.trim();
+    while !rest.is_empty() {
+        // key=
+        let eq = match rest.find('=') {
+            Some(i) => i,
+            None => break,
+        };
+        let key = rest[..eq].trim();
+        rest = &rest[eq + 1..];
+        if !rest.starts_with('"') {
+            break;
+        }
+        let val_start = 1;
+        let val_end = match rest[val_start..].find('"') {
+            Some(i) => i + val_start,
+            None => break,
+        };
+        let value = &rest[val_start..val_end];
+        out.push((key, value));
+        rest = &rest[val_end + 1..];
+        rest = rest.trim_start_matches(|c: char| c == ',' || c.is_whitespace());
+    }
+    out
+}
+
+/// Reconstruct the signing string from a request's headers.
+///
+/// `header_names` should be lowercased (as supplied by the parsed
+/// `headers="..."` field). `(request-target)` is special — substitute
+/// `<method> <path>`. `host`, `date`, `digest` come from `headers`.
+pub fn build_signing_string(
+    header_names: &[String],
+    method: &str,
+    target_path: &str,
+    headers: &axum::http::HeaderMap,
+) -> Result<String, String> {
+    let mut lines = Vec::with_capacity(header_names.len());
+    for name in header_names {
+        let n = name.to_ascii_lowercase();
+        let line = if n == "(request-target)" {
+            format!(
+                "(request-target): {} {}",
+                method.to_lowercase(),
+                target_path
+            )
+        } else {
+            let value = headers
+                .get(n.as_str())
+                .ok_or_else(|| format!("missing required header: {}", n))?
+                .to_str()
+                .map_err(|_| format!("header {} not ascii", n))?;
+            format!("{}: {}", n, value)
+        };
+        lines.push(line);
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Verify the supplied base64 RSA-SHA256 signature against the
+/// reconstructed signing string, using a PEM-encoded SPKI public key.
+pub fn verify_rsa_sha256(
+    public_key_pem: &str,
+    signing_string: &str,
+    signature_b64: &str,
+) -> Result<(), String> {
+    use rsa::pkcs8::DecodePublicKey;
+    let public_key = rsa::RsaPublicKey::from_public_key_pem(public_key_pem)
+        .map_err(|e| format!("public key parse: {}", e))?;
+    let verifying_key: VerifyingKey<Sha256> = VerifyingKey::new(public_key);
+    let sig_bytes = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64.trim())
+        .map_err(|e| format!("signature base64: {}", e))?;
+    let sig =
+        Signature::try_from(sig_bytes.as_slice()).map_err(|e| format!("signature parse: {}", e))?;
+    verifying_key
+        .verify(signing_string.as_bytes(), &sig)
+        .map_err(|e| format!("signature verify: {}", e))
 }
 
 /// Format a Unix timestamp as the `Date:` header per RFC 7231 / RFC 5322.

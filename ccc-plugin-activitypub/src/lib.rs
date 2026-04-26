@@ -401,15 +401,23 @@ async fn outbox(State(state): State<AppState>, Path(username): Path<String>) -> 
 async fn inbox(
     State(state): State<AppState>,
     Path(username): Path<String>,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
     let snap = state.settings.snapshot();
     if username != snap.username {
         return StatusCode::NOT_FOUND.into_response();
     }
-    // Parse the activity. We don't verify HTTP signatures yet — that's
-    // a follow-up. For now, deliver behavior of an unsigned but
-    // trusting endpoint.
+
+    // Verify the HTTP signature if one is present. We require it for
+    // mutating activities (Follow / Undo / Move / Delete) — anonymous
+    // POSTs to the inbox are rejected.
+    let target_path = format!("/users/{}/inbox", snap.username);
+    if let Err(e) = verify_inbound(&headers, &body, "post", &target_path).await {
+        eprintln!("[federation] inbox signature rejected: {}", e);
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
     let activity: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
@@ -421,24 +429,117 @@ async fn inbox(
         activity_type, actor_url_in
     );
 
-    if activity_type == "Follow" {
-        // Persist + asynchronously send back a signed Accept.
-        let db = state.db.clone();
-        let settings = state.settings.clone();
-        let activity_clone = activity.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_follow(&db, &settings, activity_clone).await {
-                eprintln!("[federation] follow handler failed: {}", e);
+    match activity_type.as_str() {
+        "Follow" => {
+            let db = state.db.clone();
+            let settings = state.settings.clone();
+            let activity_clone = activity.clone();
+            tokio::spawn(async move {
+                if let Err(e) = handle_follow(&db, &settings, activity_clone).await {
+                    eprintln!("[federation] follow handler failed: {}", e);
+                }
+            });
+        }
+        "Undo" => {
+            // Undo Follow: drop the follower row.
+            if activity["object"]["type"].as_str() == Some("Follow") {
+                let _ = state.db.delete_follower(&actor_url_in);
+                println!("[federation] follower removed: {}", actor_url_in);
             }
-        });
-    } else if activity_type == "Undo" {
-        // Best-effort: if it's an Undo Follow, drop the follower row.
-        if activity["object"]["type"].as_str() == Some("Follow") {
-            let _ = state.db.delete_follower(&actor_url_in);
+        }
+        "Delete" => {
+            // Account deletion: if an actor we know is being deleted,
+            // remove them from our followers list.
+            let target = activity["object"]
+                .as_str()
+                .or_else(|| activity["object"]["id"].as_str())
+                .unwrap_or("");
+            if !target.is_empty() {
+                let _ = state.db.delete_follower(target);
+                println!("[federation] delete: {} (if follower)", target);
+            }
+        }
+        "Move" => {
+            // Account migration: AP servers send Move {actor, target}.
+            // We re-key the follower row to the new actor URL by
+            // inserting fresh and deleting the old.
+            let new_actor = activity["target"].as_str().unwrap_or("").to_string();
+            if !new_actor.is_empty() && !actor_url_in.is_empty() {
+                if let Ok(followers) = state.db.all_followers() {
+                    if let Some(prev) = followers.into_iter().find(|f| f.actor_url == actor_url_in)
+                    {
+                        let mut migrated = prev.clone();
+                        migrated.actor_url = new_actor.clone();
+                        let _ = state.db.upsert_follower(&migrated);
+                        let _ = state.db.delete_follower(&actor_url_in);
+                        println!(
+                            "[federation] follower migrated: {} -> {}",
+                            actor_url_in, new_actor
+                        );
+                    }
+                }
+            }
+        }
+        _ => {
+            // Anything else: accept silently. Like, Announce, Create
+            // from someone else, etc. — we don't store remote content yet.
         }
     }
 
     StatusCode::ACCEPTED.into_response()
+}
+
+/// Verify the `Signature` header against `body` using the public key at
+/// the actor URL named in `keyId`. Returns Err with a human-readable
+/// reason if anything goes wrong; the inbox handler logs and 401s.
+async fn verify_inbound(
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+    method: &str,
+    target_path: &str,
+) -> Result<(), String> {
+    let sig_header = headers
+        .get("signature")
+        .ok_or_else(|| "missing Signature header".to_string())?
+        .to_str()
+        .map_err(|_| "Signature header not ASCII".to_string())?;
+    let parsed = sig::parse_signature_header(sig_header)
+        .ok_or_else(|| "could not parse Signature header".to_string())?;
+
+    // Sanity-check the digest matches the body, if it's claimed in headers.
+    if parsed.headers.iter().any(|h| h == "digest") {
+        let provided = headers
+            .get("digest")
+            .ok_or("digest claimed in signature but missing from request")?
+            .to_str()
+            .map_err(|_| "Digest header not ASCII")?;
+        let computed = sig::body_digest(body);
+        if provided != computed {
+            return Err("digest header does not match body hash".to_string());
+        }
+    }
+
+    // Fetch the remote actor's public key.
+    let key_url = parsed.key_id.split('#').next().unwrap_or(&parsed.key_id);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let actor: serde_json::Value = client
+        .get(key_url)
+        .header("Accept", "application/activity+json")
+        .send()
+        .await
+        .map_err(|e| format!("fetch actor: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("parse actor JSON: {}", e))?;
+    let pub_pem = actor["publicKey"]["publicKeyPem"]
+        .as_str()
+        .ok_or("remote actor has no publicKeyPem")?;
+
+    let signing_string = sig::build_signing_string(&parsed.headers, method, target_path, headers)?;
+    sig::verify_rsa_sha256(pub_pem, &signing_string, &parsed.signature_b64)
 }
 
 /// Persist the follower, fetch their inbox URL from their actor profile,

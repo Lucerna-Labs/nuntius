@@ -208,6 +208,17 @@ fn spawn_transcode_worker(state: AppState) {
     });
 }
 
+/// Adaptive-bitrate ladder rendered for every uploaded video.
+/// (height, video bitrate, audio bitrate). Tuned for talking-head /
+/// podcast video, not 4K cinema. The HLS player serves the highest
+/// quality the listener's connection can sustain.
+const VARIANTS: &[(u32, &str, &str)] = &[
+    (240, "400k", "64k"),
+    (360, "800k", "96k"),
+    (480, "1400k", "128k"),
+    (720, "2800k", "128k"),
+];
+
 async fn transcode_one(state: &AppState, mut video: VideoPodcast) {
     use tokio::process::Command;
 
@@ -217,22 +228,68 @@ async fn transcode_one(state: &AppState, mut video: VideoPodcast) {
         return;
     }
 
-    let playlist = hls_dir.join("playlist.m3u8");
+    // Single ffmpeg invocation that produces:
+    //   <hls_dir>/v0/playlist.m3u8 (240p)
+    //   <hls_dir>/v1/playlist.m3u8 (360p)
+    //   <hls_dir>/v2/playlist.m3u8 (480p)
+    //   <hls_dir>/v3/playlist.m3u8 (720p)
+    //   <hls_dir>/master.m3u8 (referencing all four)
+    // Doing it in one process is faster and saves a re-decode per rung.
+    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), video.source_path.clone()];
+    // Per-variant codec settings.
+    for (_h, vbr, abr) in VARIANTS {
+        args.extend([
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "veryfast".into(),
+            "-c:a".into(),
+            "aac".into(),
+            "-b:v".into(),
+            (*vbr).to_string(),
+            "-b:a".into(),
+            (*abr).to_string(),
+        ]);
+    }
+    // Map video + (optional) audio into each output, scaled per height.
+    for (i, (h, _vbr, _abr)) in VARIANTS.iter().enumerate() {
+        args.extend([
+            "-map".into(),
+            "0:v:0".into(),
+            "-map".into(),
+            "0:a:0?".into(),
+            format!("-s:v:{}", i),
+            format!("{}x{}", (*h * 16) / 9, h),
+        ]);
+    }
+    let var_stream_map = (0..VARIANTS.len())
+        .map(|i| format!("v:{},a:{}", i, i))
+        .collect::<Vec<_>>()
+        .join(" ");
+    args.extend([
+        "-var_stream_map".into(),
+        var_stream_map,
+        "-master_pl_name".into(),
+        "master.m3u8".into(),
+        "-f".into(),
+        "hls".into(),
+        "-hls_time".into(),
+        "6".into(),
+        "-hls_list_size".into(),
+        "0".into(),
+        "-hls_segment_filename".into(),
+        hls_dir
+            .join("v%v/seg-%03d.ts")
+            .to_string_lossy()
+            .to_string(),
+        hls_dir
+            .join("v%v/playlist.m3u8")
+            .to_string_lossy()
+            .to_string(),
+    ]);
+
     let cmd = Command::new(state.ffmpeg.as_ref())
-        .arg("-y")
-        .arg("-i")
-        .arg(&video.source_path)
-        .arg("-codec:")
-        .arg("copy")
-        .arg("-start_number")
-        .arg("0")
-        .arg("-hls_time")
-        .arg("10")
-        .arg("-hls_list_size")
-        .arg("0")
-        .arg("-f")
-        .arg("hls")
-        .arg(&playlist)
+        .args(&args)
         .output()
         .await;
 
@@ -293,10 +350,10 @@ async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) ->
 <script>
   if (Hls.isSupported()) {{
     var hls = new Hls();
-    hls.loadSource('/videos/hls/{hls_dir}/playlist.m3u8');
+    hls.loadSource('/videos/hls/{hls_dir}/master.m3u8');
     hls.attachMedia(document.getElementById('video'));
   }} else {{
-    document.getElementById('video').src = '/videos/hls/{hls_dir}/playlist.m3u8';
+    document.getElementById('video').src = '/videos/hls/{hls_dir}/master.m3u8';
   }}
 </script>
 </main></body></html>"#,

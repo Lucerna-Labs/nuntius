@@ -23,7 +23,7 @@ use axum::{
     routing::get,
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, MembershipService, Plugin, PluginError};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -199,6 +199,43 @@ impl CccPluginPatreonPlugin {
             None => false,
         }
     }
+
+    /// Decode the patron session straight from a `Cookie:` header value
+    /// (no axum extractor needed). Used by the cross-plugin
+    /// `MembershipService` impl below so sibling plugins can verify
+    /// membership without depending on tower-cookies themselves.
+    pub fn current_patron_from_header(
+        &self,
+        headers: &axum::http::HeaderMap,
+    ) -> Option<PatronSession> {
+        let cookie_header = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+        let mut jar = tower_cookies::cookie::CookieJar::new();
+        for c in tower_cookies::cookie::Cookie::split_parse(cookie_header).flatten() {
+            jar.add_original(c.into_owned());
+        }
+        let key = Key::from(&self.settings.cookie_key);
+        let signed = jar.signed(&key);
+        let cookie = signed.get(SESSION_COOKIE)?;
+        serde_json::from_str(cookie.value()).ok()
+    }
+}
+
+/// Cross-plugin handle. Sibling plugins look this up via
+/// `ctx.services.membership()` to gate content on membership.
+pub struct PatreonMembership {
+    settings: Arc<SettingsStore>,
+}
+
+impl MembershipService for PatreonMembership {
+    fn is_member(&self, headers: &axum::http::HeaderMap) -> bool {
+        let p = CccPluginPatreonPlugin {
+            settings: self.settings.clone(),
+        };
+        match p.current_patron_from_header(headers) {
+            Some(s) => s.is_member,
+            None => false,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -221,7 +258,13 @@ impl Plugin for CccPluginPatreonPlugin {
         Ok(())
     }
 
-    fn routes(&self, _ctx: &AppContext) -> Option<Router> {
+    fn routes(&self, ctx: &AppContext) -> Option<Router> {
+        // Publish the membership-check service so sibling plugins
+        // (podcast members feed, etc.) can gate content.
+        ctx.services.set_membership(Arc::new(PatreonMembership {
+            settings: self.settings.clone(),
+        }));
+
         let state = PluginState {
             settings: self.settings.clone(),
         };

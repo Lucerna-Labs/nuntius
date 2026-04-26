@@ -23,7 +23,7 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError, ServiceRegistry};
 use ccc_database::{CccDB, EpisodeStatus, PodcastEpisode, TranscriptionJob, TranscriptionStatus};
 use rss::{
     extension::itunes::{ITunesChannelExtensionBuilder, ITunesItemExtensionBuilder},
@@ -86,6 +86,7 @@ struct AppState {
     audio_dir: Arc<PathBuf>,
     members_token: Arc<String>,
     events: Arc<EventBus>,
+    services: Arc<ServiceRegistry>,
 }
 
 impl Plugin for PodcastPlugin {
@@ -118,6 +119,7 @@ impl Plugin for PodcastPlugin {
             audio_dir: Arc::new(self.audio_dir.clone()),
             members_token: Arc::new(self.members_token.clone()),
             events: ctx.events.clone(),
+            services: ctx.services.clone(),
         };
         Some(
             Router::new()
@@ -135,6 +137,7 @@ impl Plugin for PodcastPlugin {
             audio_dir: Arc::new(self.audio_dir.clone()),
             members_token: Arc::new(self.members_token.clone()),
             events: ctx.events.clone(),
+            services: ctx.services.clone(),
         };
         Some(
             Router::new()
@@ -185,10 +188,9 @@ struct MembersFeedQuery {
 async fn public_members_feed(
     State(state): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<MembersFeedQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
-    let supplied = q.token.unwrap_or_default();
-    let expected: &str = state.members_token.as_str();
-    if expected.is_empty() || supplied != expected {
+    if !members_authorized(&state, &q, &headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let episodes = match state.db.latest_published_podcast_episodes(50) {
@@ -196,6 +198,28 @@ async fn public_members_feed(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     build_feed_response("Creator Command Center Podcast (Members)", &episodes)
+}
+
+/// Members are admitted if EITHER:
+/// - the request carries the configured shared `?token=...`, OR
+/// - the Patreon plugin is enabled and the request's cookie identifies
+///   an active patron (verified signature, active membership).
+fn members_authorized(
+    state: &AppState,
+    q: &MembersFeedQuery,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    let token_ok = match (state.members_token.as_str(), q.token.as_deref()) {
+        (expected, Some(supplied)) if !expected.is_empty() => supplied == expected,
+        _ => false,
+    };
+    if token_ok {
+        return true;
+    }
+    if let Some(membership) = state.services.membership() {
+        return membership.is_member(headers);
+    }
+    false
 }
 
 fn build_feed_response(title: &str, episodes: &[ccc_database::PodcastEpisode]) -> Response {
@@ -283,18 +307,15 @@ async fn public_download(
     State(state): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<MembersFeedQuery>,
     Path(id): Path<u64>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     let ep = match state.db.get_podcast_episode(id) {
         Ok(Some(e)) if e.status == EpisodeStatus::Published => e,
         Ok(_) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    if ep.members_only {
-        let supplied = q.token.unwrap_or_default();
-        let expected: &str = state.members_token.as_str();
-        if expected.is_empty() || supplied != expected {
-            return StatusCode::FORBIDDEN.into_response();
-        }
+    if ep.members_only && !members_authorized(&state, &q, &headers) {
+        return StatusCode::FORBIDDEN.into_response();
     }
     let file = match tokio::fs::File::open(&ep.audio_path).await {
         Ok(f) => f,

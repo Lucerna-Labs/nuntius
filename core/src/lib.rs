@@ -5,8 +5,10 @@
 
 pub mod activitypub;
 pub mod config;
+pub mod services;
 
 pub use config::{CccConfig, ConfigError, DatabaseConfig, PluginsConfig, ServerConfig};
+pub use services::{MembershipService, ServiceRegistry};
 
 use axum::Router;
 use ccc_database::CccDB;
@@ -66,6 +68,11 @@ impl Default for EventBus {
 pub struct AppContext {
     pub db: Arc<CccDB>,
     pub events: Arc<EventBus>,
+    /// Cross-plugin service registry. Plugins publish capabilities they
+    /// expose (e.g. `Arc<dyn MembershipService>`); consumers look them
+    /// up by type. When the providing plugin is disabled, lookups
+    /// return `None` and consumers should degrade gracefully.
+    pub services: Arc<ServiceRegistry>,
 }
 
 /// A sidebar entry a plugin contributes to the CMS admin shell.
