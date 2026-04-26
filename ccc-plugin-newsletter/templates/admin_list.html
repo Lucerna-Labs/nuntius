@@ -1,0 +1,52 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Newsletter — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Newsletter</h1>
+  <p class="cms-page__lede">{{ active_count }} active subscriber(s) · {{ subscribers.len() }} total.</p>
+  <div style="margin-top:8px;">
+    <a class="cms-btn cms-btn--primary" href="/admin/newsletter/compose" style="display:inline-block;">Compose &amp; send</a>
+    <a class="cms-btn" href="/admin/newsletter/settings" style="display:inline-block; padding:10px 16px;">SMTP settings</a>
+  </div>
+</header>
+
+{% match status_message %}
+  {% when Some with (msg) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+{% if subscribers.is_empty() %}
+  <p>No subscribers yet. Share the public form at <code>/newsletter/subscribe</code> to start collecting.</p>
+{% else %}
+<table class="cms-table">
+  <thead>
+    <tr><th>Email</th><th>Status</th><th>Joined</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for s in subscribers %}
+    <tr>
+      <td>{{ s.email }}</td>
+      <td>{% if s.active %}<span class="cms-badge cms-badge--published">active</span>{% else %}<span class="cms-badge cms-badge--draft">unsubscribed</span>{% endif %}</td>
+      <td>{{ s.created_human }}</td>
+      <td>
+        <form method="post" action="/admin/newsletter/{{ s.id }}/delete"
+              onsubmit="return confirm('Remove this subscriber?')" style="display:inline">
+          <button class="cms-btn cms-btn--danger" type="submit">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Public sign-up</h3>
+  <p>Send people to <a href="/newsletter/subscribe">/newsletter/subscribe</a> to subscribe.</p>
+</div>
+{% endblock %}

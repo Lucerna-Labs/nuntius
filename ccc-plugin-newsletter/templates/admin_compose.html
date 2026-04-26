@@ -1,0 +1,45 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Compose — Newsletter — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Compose newsletter</h1>
+  <p class="cms-page__lede">Will send to {{ recipient_count }} active subscriber(s).</p>
+</header>
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/newsletter/send" class="cms-form" style="max-width:780px">
+  <label class="cms-field">
+    <span class="cms-field__label">Subject</span>
+    <input class="cms-field__input" type="text" name="subject" required value="{{ subject }}" autofocus>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Body (HTML or plain text)</span>
+    <textarea class="cms-field__input" name="body" rows="18" required>{{ body }}</textarea>
+    <span class="cms-field__hint">Sent as both plain text and HTML — line breaks are preserved.</span>
+  </label>
+
+  <div style="display:flex; gap:8px;">
+    <button class="cms-btn cms-btn--primary" type="submit">Send to {{ recipient_count }} subscriber(s)</button>
+    <a class="cms-btn" href="/admin/newsletter" style="display:inline-flex; align-items:center; padding:10px 16px;">Cancel</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Tips</h3>
+  <ul class="cms-rail__list">
+    <li>Test with one or two subscribers first.</li>
+    <li>Once sent, you can't recall the email.</li>
+    <li>SMTP credentials live in <a href="/admin/newsletter/settings">Settings</a>.</li>
+  </ul>
+</div>
+{% endblock %}

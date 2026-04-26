@@ -25,6 +25,13 @@ const BLOG_POSTS_SLUG_INDEX: TableDefinition<&str, u64> = TableDefinition::new("
 const TRANSCRIPTION_JOBS_TABLE: TableDefinition<u64, &[u8]> =
     TableDefinition::new("transcription_jobs");
 
+/// Newsletter subscribers (Newsletter plugin).
+const NEWSLETTER_SUBSCRIBERS_TABLE: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("newsletter_subscribers");
+/// Email -> ID lookup (uniqueness enforcement).
+const NEWSLETTER_EMAIL_INDEX: TableDefinition<&str, u64> =
+    TableDefinition::new("newsletter_email_index");
+
 /// The main table where tracks are stored.
 /// Key: Track ID (u64)
 /// Value: Serialized Track
@@ -137,6 +144,15 @@ pub struct TranscriptionJob {
     pub updated_at: u64,
 }
 
+/// A newsletter subscriber.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Subscriber {
+    pub id: u64,
+    pub email: String,
+    pub active: bool,
+    pub created_at: u64,
+}
+
 /// Example struct for a Radio Track
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Track {
@@ -185,6 +201,8 @@ impl CccDB {
             write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
             write_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
             write_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
+            write_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
+            write_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
             write_txn.open_table(TRACKS_TABLE)?;
             write_txn.open_table(PODCASTS_TABLE)?;
             write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
@@ -510,5 +528,78 @@ impl CccDB {
             .into_iter()
             .filter(|j| j.status == TranscriptionStatus::Queued)
             .collect())
+    }
+
+    // --- NEWSLETTER SUBSCRIBERS ---
+
+    /// Insert or update a subscriber. Email must be unique across rows.
+    pub fn upsert_subscriber(&self, sub: &Subscriber) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut main = write_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
+            let mut idx = write_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
+
+            if let Some(existing) = idx.get(sub.email.as_str())? {
+                if existing.value() != sub.id {
+                    return Err(Error::Corrupted(format!(
+                        "email '{}' already used by subscriber {}",
+                        sub.email,
+                        existing.value()
+                    )));
+                }
+            }
+            // Drop stale email-index entry if email changed.
+            if let Some(prev_raw) = main.get(sub.id)? {
+                let prev: Subscriber = bincode::deserialize(prev_raw.value()).unwrap();
+                if prev.email != sub.email {
+                    idx.remove(prev.email.as_str())?;
+                }
+            }
+            let bytes = bincode::serialize(sub).unwrap();
+            main.insert(sub.id, bytes.as_slice())?;
+            idx.insert(sub.email.as_str(), sub.id)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_subscriber(&self, id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut main = write_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
+            let mut idx = write_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
+            if let Some(prev_raw) = main.get(id)? {
+                let prev: Subscriber = bincode::deserialize(prev_raw.value()).unwrap();
+                idx.remove(prev.email.as_str())?;
+            }
+            main.remove(id)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn get_subscriber_by_email(&self, email: &str) -> Result<Option<Subscriber>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let idx = read_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
+        let main = read_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
+        let id = match idx.get(email)? {
+            Some(v) => v.value(),
+            None => return Ok(None),
+        };
+        Ok(main
+            .get(id)?
+            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+    }
+
+    pub fn all_subscribers(&self) -> Result<Vec<Subscriber>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
+        let mut out: Vec<Subscriber> = table
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
+            .collect();
+        out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(out)
     }
 }

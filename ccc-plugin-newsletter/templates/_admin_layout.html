@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Newsletter — Creator Command Center{% endblock %}</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+  <script src="/admin/static/htmx.min.js" defer></script>
+</head>
+<body class="cms">
+  <div class="cms-shell">
+    <aside class="cms-shell__nav" aria-label="Primary navigation">
+      <div class="cms-brand">
+        <span class="cms-brand__mark">CCC</span>
+        <span class="cms-brand__name">Command Center</span>
+      </div>
+      <nav class="cms-nav">
+        <a class="cms-nav__item" href="/admin/">Dashboard</a>
+        <a class="cms-nav__item" href="/admin/blog/posts">Blog</a>
+        <a class="cms-nav__item" href="/admin/federation">Federation</a>
+        <a class="cms-nav__item" href="/admin/transcripts">Transcripts</a>
+        <a class="cms-nav__item" href="/admin/storage">Storage</a>
+        <a class="cms-nav__item cms-nav__item--active" href="/admin/newsletter">Newsletter</a>
+        <a class="cms-nav__item cms-nav__item--bottom" href="/admin/logout">Sign out</a>
+      </nav>
+    </aside>
+
+    <main class="cms-shell__main" id="main">
+      {% block content %}{% endblock %}
+    </main>
+
+    <aside class="cms-shell__rail" id="right-rail">
+      {% block right_rail %}{% endblock %}
+    </aside>
+  </div>
+</body>
+</html>
