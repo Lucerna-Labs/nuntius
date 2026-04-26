@@ -6,7 +6,10 @@ edition = "2021"
 [dependencies]
 ccc-core = { path = "../core" }
 ccc-database = { path = "../database" }
-tokio = { version = "1.0", features = ["full"] }
-axum = "0.7.9"
+tokio = { version = "1.0", features = ["full", "process"] }
+axum = { version = "0.7.9", features = ["macros", "multipart"] }
 serde = { version = "1.0", features = ["derive"] }
 tower-http = { version = "0.5", features = ["fs", "cors"] }
+askama = "0.12"
+askama_axum = "0.4"
+toml = "0.8"

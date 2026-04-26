@@ -33,14 +33,7 @@ pub fn register_by_name(
             manager.register(ccc_plugin_podcast::PodcastPlugin::from_config(cfg))?;
         }
         "video-podcast" => {
-            // Per-plugin config under [plugin.video-podcast].
-            let hls_dir = cfg
-                .plugin
-                .get("video-podcast")
-                .and_then(|t| t.get("hls_dir"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("./hls");
-            manager.register(ccc_plugin_video_podcast::VideoPodcastPlugin::new(hls_dir))?;
+            manager.register(ccc_plugin_video_podcast::VideoPodcastPlugin::from_config(cfg))?;
         }
         "store" => {
             manager.register(ccc_plugin_store::PluginStorePlugin)?;

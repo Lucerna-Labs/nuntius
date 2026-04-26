@@ -1,0 +1,55 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Videos — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Videos</h1>
+  <p class="cms-page__lede">{{ videos.len() }} video(s).</p>
+  {% if ffmpeg_available %}
+    <a class="cms-btn cms-btn--primary" href="/admin/videos/new" style="display:inline-block; margin-top:8px;">Upload video</a>
+  {% else %}
+    <div class="cms-alert" style="background: var(--surface-2); padding: 10px 12px; border-radius: 6px; margin-top: 8px;">
+      <strong>ffmpeg not detected on PATH.</strong> Install ffmpeg to enable transcoding,
+      then refresh this page. Existing videos will continue to play.
+    </div>
+  {% endif %}
+</header>
+
+{% if videos.is_empty() %}
+  <p>No videos yet.</p>
+{% else %}
+<table class="cms-table">
+  <thead>
+    <tr><th>Title</th><th>Slug</th><th>Status</th><th>Size</th><th>Updated</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for v in videos %}
+    <tr>
+      <td><a href="/admin/videos/{{ v.id }}/edit">{{ v.title }}</a></td>
+      <td><code>{{ v.slug }}</code></td>
+      <td><span class="cms-badge cms-badge--{{ v.status_str }}">{{ v.status_str }}</span></td>
+      <td>{{ v.size_human }}</td>
+      <td>{{ v.updated_human }}</td>
+      <td>
+        <form method="post" action="/admin/videos/{{ v.id }}/delete"
+              onsubmit="return confirm('Delete this video and its segments?')" style="display:inline">
+          <button class="cms-btn cms-btn--danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Public</h3>
+  <ul class="cms-rail__list">
+    <li><code>/videos/:slug</code> — HLS player page</li>
+    <li><code>/videos/hls/...</code> — segments served by axum</li>
+  </ul>
+</div>
+{% endblock %}

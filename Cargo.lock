@@ -615,11 +615,14 @@ dependencies = [
 name = "ccc-plugin-video-podcast"
 version = "0.1.0"
 dependencies = [
+ "askama",
+ "askama_axum",
  "axum",
  "ccc-core",
  "ccc-database",
  "serde",
  "tokio",
+ "toml",
  "tower-http 0.5.2",
 ]
 

@@ -1,0 +1,41 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Upload video — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Upload video</h1>
+  <p class="cms-page__lede">We'll segment this into HLS for browser playback.</p>
+</header>
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/videos/new" enctype="multipart/form-data" class="cms-form" style="max-width:680px">
+  <label class="cms-field">
+    <span class="cms-field__label">Title</span>
+    <input class="cms-field__input" type="text" name="title" required autofocus>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Slug</span>
+    <input class="cms-field__input" type="text" name="slug" required pattern="[a-z0-9-]+">
+    <span class="cms-field__hint">Public URL becomes <code>/videos/&lt;slug&gt;</code>.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Description</span>
+    <textarea class="cms-field__input" name="description" rows="6"></textarea>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Source video</span>
+    <input class="cms-field__input" type="file" name="video" required accept="video/*">
+    <span class="cms-field__hint">Up to {{ max_mb }} MB. Anything ffmpeg can read works.</span>
+  </label>
+  <div style="display:flex; gap:8px;">
+    <button class="cms-btn cms-btn--primary" type="submit">Upload &amp; transcode</button>
+    <a class="cms-btn" href="/admin/videos" style="display:inline-flex; align-items:center; padding:10px 16px;">Cancel</a>
+  </div>
+</form>
+{% endblock %}
