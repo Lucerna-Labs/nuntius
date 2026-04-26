@@ -1,0 +1,79 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Storage — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Object storage (S3-compatible)</h1>
+  <p class="cms-page__lede">
+    Where CCC stores uploaded media. Works with AWS S3, Cloudflare R2,
+    Backblaze B2, MinIO, and any other S3-compatible service.
+  </p>
+</header>
+
+{% match status %}
+  {% when Some with (msg) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/storage" class="cms-form" style="max-width:680px">
+  <label class="cms-field">
+    <span class="cms-field__label">Bucket name</span>
+    <input class="cms-field__input" type="text" name="bucket" value="{{ bucket }}" required>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Region</span>
+    <input class="cms-field__input" type="text" name="region" value="{{ region }}" required
+           placeholder="us-east-1, auto, ...">
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Endpoint URL</span>
+    <input class="cms-field__input" type="text" name="endpoint" value="{{ endpoint }}"
+           placeholder="https://s3.amazonaws.com or https://&lt;account&gt;.r2.cloudflarestorage.com">
+    <span class="cms-field__hint">Leave blank for AWS S3 (default).</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Access key ID</span>
+    <input class="cms-field__input" type="text" name="access_key" value="{{ access_key }}" required
+           autocomplete="off">
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Secret access key</span>
+    <input class="cms-field__input" type="password" name="secret_key" value="{{ secret_key }}" required
+           autocomplete="new-password">
+    <span class="cms-field__hint">Stored in s3.toml on disk. Treat that file like a secret.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Public URL base</span>
+    <input class="cms-field__input" type="text" name="public_url_base" value="{{ public_url_base }}"
+           placeholder="https://media.example.com or https://&lt;bucket&gt;.r2.dev">
+    <span class="cms-field__hint">Public-facing URL where uploaded files are reachable. Used to build links shown to your audience.</span>
+  </label>
+
+  <div style="display:flex; gap:8px;">
+    <button class="cms-btn cms-btn--primary" type="submit" name="action" value="save">Save</button>
+    <button class="cms-btn" type="submit" name="action" value="test">Save &amp; test connection</button>
+  </div>
+</form>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>What this enables</h3>
+  <p>Plugins that need to store media (podcast episodes, video uploads, blog images) will use this bucket as the backend.</p>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Provider quickstarts</h3>
+  <ul class="cms-rail__list">
+    <li><strong>Cloudflare R2:</strong> region <code>auto</code>, endpoint <code>https://&lt;account&gt;.r2.cloudflarestorage.com</code></li>
+    <li><strong>Backblaze B2:</strong> region matches bucket region, endpoint <code>https://s3.&lt;region&gt;.backblazeb2.com</code></li>
+    <li><strong>MinIO:</strong> any region, endpoint your MinIO URL</li>
+  </ul>
+</div>
+{% endblock %}

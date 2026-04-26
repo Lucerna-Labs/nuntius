@@ -70,7 +70,8 @@ pub fn register_by_name(
             manager.register(ccc_plugin_patreon::CccPluginPatreonPlugin)?;
         }
         "s3" => {
-            manager.register(ccc_plugin_s3::CccPluginS3Plugin)?;
+            let plugin = ccc_plugin_s3::CccPluginS3Plugin::from_config(cfg)?;
+            manager.register(plugin)?;
         }
         "seo" => {
             manager.register(ccc_plugin_seo::CccPluginSeoPlugin)?;

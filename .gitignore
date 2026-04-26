@@ -10,6 +10,7 @@ admin.toml
 federation.toml
 whisper.toml
 /transcripts/
+s3.toml
 
 # Local logs from cargo runs we kept while bootstrapping
 cargo-check.log
