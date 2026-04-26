@@ -24,6 +24,7 @@ pub struct IceCandidate {
 }
 
 /// The main entry point for the Call Studio Plugin.
+#[derive(Default)]
 pub struct CallStudioPlugin;
 
 impl CallStudioPlugin {

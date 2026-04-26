@@ -1,3 +1,7 @@
+#![allow(clippy::result_large_err)]
+// `redb::Error` is ~160 bytes; clippy::result_large_err is upstream-driven and
+// not actionable without wrapping every call site.
+
 use redb::{Database, Error, TableDefinition};
 use serde::{Deserialize, Serialize};
 

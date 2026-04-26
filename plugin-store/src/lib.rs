@@ -38,6 +38,7 @@ pub struct PluginRegistry {
 }
 
 /// The main entry point for the Plugin Store manager.
+#[derive(Default)]
 pub struct PluginStorePlugin;
 
 impl PluginStorePlugin {

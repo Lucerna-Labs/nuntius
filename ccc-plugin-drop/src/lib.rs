@@ -24,6 +24,7 @@ pub struct IceCandidate {
 }
 
 /// The main entry point for the CCC Drop Plugin.
+#[derive(Default)]
 pub struct DropPlugin;
 
 impl DropPlugin {

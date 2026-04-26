@@ -2,6 +2,7 @@ use ccc_core::{Plugin, PluginError};
 use std::any::Any;
 
 /// A simple Static Blog plugin for Creator Command Center (CCC).
+#[derive(Default)]
 pub struct StaticBlogPlugin {
     posts: Vec<String>,
 }

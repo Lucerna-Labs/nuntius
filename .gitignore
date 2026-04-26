@@ -1,2 +1,13 @@
-target/
-target/
+/target/
+**/*.rs.bk
+*.pdb
+.DS_Store
+
+# Local logs from cargo runs we kept while bootstrapping
+cargo-check.log
+cargo-clippy.log
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp

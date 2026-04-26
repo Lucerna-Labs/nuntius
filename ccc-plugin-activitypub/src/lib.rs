@@ -1,6 +1,7 @@
 use ccc_core::{Plugin, PluginError};
 use std::any::Any;
 
+#[derive(Default)]
 pub struct CccPluginActivitypubPlugin;
 
 impl CccPluginActivitypubPlugin {
