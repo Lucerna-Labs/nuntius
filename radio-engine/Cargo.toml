@@ -21,3 +21,6 @@ rand = "0.8"
 
 # Audio metadata extraction (artist, title, duration, bitrate from MP3/M4A/FLAC).
 lofty = "0.21"
+
+# URL parsing for the relay client.
+url = "2"

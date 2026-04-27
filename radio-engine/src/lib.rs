@@ -74,6 +74,12 @@ pub struct RadioSettings {
     /// Created on first run if it doesn't exist.
     #[serde(default = "default_library_dir")]
     pub library_dir: String,
+    /// Optional upstream Icecast/SHOUTcast URL. When set, the relay
+    /// task connects as a listener and pumps received bytes into our
+    /// broadcast channel. Live source connections still preempt it.
+    /// Empty string = disabled.
+    #[serde(default)]
+    pub relay_url: String,
 }
 
 fn default_library_dir() -> String {
@@ -89,6 +95,7 @@ impl Default for RadioSettings {
             content_type: "audio/mpeg".into(),
             stream_name: "Creator Command Center Radio".into(),
             library_dir: default_library_dir(),
+            relay_url: String::new(),
         }
     }
 }
@@ -170,6 +177,9 @@ struct EngineState {
     /// On-air recording state. `Some(...)` means the recording task is
     /// active and writing every broadcast byte to `path`.
     recording: Arc<RwLock<Option<RecordingHandle>>>,
+    /// True iff the relay task currently has an upstream connection
+    /// and is pumping bytes. AutoDJ pauses when relay_alive == true.
+    relay_alive: Arc<AtomicBool>,
     /// Live database handle (None when constructed via the legacy CLI
     /// `radio` subcommand, which has no DB).
     db: Option<Arc<CccDB>>,
@@ -233,6 +243,7 @@ impl RadioEnginePlugin {
                 HISTORY_CAPACITY,
             ))),
             recording: Arc::new(RwLock::new(None)),
+            relay_alive: Arc::new(AtomicBool::new(false)),
             db: None,
         };
         Self {
@@ -268,6 +279,7 @@ impl RadioEnginePlugin {
                 HISTORY_CAPACITY,
             ))),
             recording: Arc::new(RwLock::new(None)),
+            relay_alive: Arc::new(AtomicBool::new(false)),
             db: None,
         };
         Ok(Self {
@@ -338,6 +350,7 @@ impl Plugin for RadioEnginePlugin {
         };
         spawn_autodj(st.clone());
         spawn_recorder(st.clone());
+        spawn_relay(st.clone());
         Some(
             Router::new()
                 .route("/radio", get(admin_get).post(admin_post))
@@ -637,12 +650,14 @@ fn auth_ok(headers: &str, expected_password: &str) -> bool {
 #[template(path = "admin_dashboard.html")]
 struct AdminDashboardPage {
     source_alive: bool,
+    relay_alive: bool,
     listeners: usize,
     port: u16,
     mount_path: String,
     source_password: String,
     content_type: String,
     stream_name: String,
+    relay_url: String,
     track_count: usize,
     now_playing_title: Option<String>,
     now_playing_artist: Option<String>,
@@ -667,12 +682,14 @@ async fn admin_get(State(state): State<EngineState>) -> Response {
         .map(|h| h.path.clone());
     render(AdminDashboardPage {
         source_alive: state.source_alive.load(Ordering::SeqCst),
+        relay_alive: state.relay_alive.load(Ordering::SeqCst),
         listeners: state.listener_count.load(Ordering::SeqCst),
         port: snap.port,
         mount_path: snap.mount_path,
         source_password: snap.source_password,
         content_type: snap.content_type,
         stream_name: snap.stream_name,
+        relay_url: snap.relay_url,
         track_count,
         now_playing_title: np.as_ref().map(|n| n.title.clone()),
         now_playing_artist: np.as_ref().and_then(|n| {
@@ -693,6 +710,8 @@ struct SettingsForm {
     mount_path: String,
     content_type: String,
     stream_name: String,
+    #[serde(default)]
+    relay_url: String,
 }
 
 async fn admin_post(State(state): State<EngineState>, Form(form): Form<SettingsForm>) -> Response {
@@ -701,6 +720,7 @@ async fn admin_post(State(state): State<EngineState>, Form(form): Form<SettingsF
     snap.mount_path = form.mount_path.trim().to_string();
     snap.content_type = form.content_type.trim().to_string();
     snap.stream_name = form.stream_name.trim().to_string();
+    snap.relay_url = form.relay_url.trim().to_string();
     let _ = state.settings.replace(snap);
     Redirect::to("/admin/radio?saved=1").into_response()
 }
@@ -771,12 +791,24 @@ async fn autodj_loop(state: EngineState) {
     };
 
     loop {
-        // While a live source is live, the AutoDJ should not stream.
+        // Live source > relay > AutoDJ. Pause if either upstream is feeding bytes.
         if state.source_alive.load(Ordering::SeqCst) {
             *state.now_playing.write().expect("np poisoned") = Some(NowPlaying {
                 source: "live",
                 track_id: None,
                 title: "Live broadcast".into(),
+                artist: String::new(),
+                started_at: unix_now(),
+                duration_seconds: 0,
+            });
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+        if state.relay_alive.load(Ordering::SeqCst) {
+            *state.now_playing.write().expect("np poisoned") = Some(NowPlaying {
+                source: "relay",
+                track_id: None,
+                title: "Relay".into(),
                 artist: String::new(),
                 started_at: unix_now(),
                 duration_seconds: 0,
@@ -826,7 +858,8 @@ async fn autodj_loop(state: EngineState) {
 
         println!("[autodj] starting pass: {}", source_label);
         for track in queue {
-            if state.source_alive.load(Ordering::SeqCst) {
+            if state.source_alive.load(Ordering::SeqCst) || state.relay_alive.load(Ordering::SeqCst)
+            {
                 break;
             }
             // The active playlist might have changed (different schedule
@@ -851,6 +884,119 @@ async fn autodj_loop(state: EngineState) {
                 track.artist, track.title, track.duration_seconds
             );
             stream_track(&state, &track).await;
+        }
+    }
+}
+
+// ============================================================================
+// Stream relay — pulls an upstream Icecast/SHOUTcast URL and pumps the
+// bytes into our broadcast channel. Live source connections preempt it.
+// ============================================================================
+
+fn spawn_relay(state: EngineState) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SPAWNED: AtomicBool = AtomicBool::new(false);
+    if SPAWNED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tokio::spawn(relay_loop(state));
+}
+
+async fn relay_loop(state: EngineState) {
+    loop {
+        let url = state.settings.snapshot().relay_url;
+        if url.is_empty() {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+        // Don't compete with a live source.
+        if state.source_alive.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+        match relay_once(&state, &url).await {
+            Ok(()) => {
+                // Upstream closed cleanly — back off briefly and retry.
+                state.relay_alive.store(false, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+            Err(e) => {
+                state.relay_alive.store(false, Ordering::SeqCst);
+                eprintln!("[radio-engine] relay error from {}: {}", url, e);
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+    }
+}
+
+/// One full upstream connection. Connects, reads HTTP response headers,
+/// then pumps the body into our broadcast channel until closed.
+async fn relay_once(state: &EngineState, url_str: &str) -> Result<(), String> {
+    let url = url::Url::parse(url_str).map_err(|e| format!("bad URL: {}", e))?;
+    let host = url.host_str().ok_or("no host in URL")?.to_string();
+    let port = url.port().unwrap_or(80);
+    let path = if let Some(q) = url.query() {
+        format!("{}?{}", url.path(), q)
+    } else {
+        url.path().to_string()
+    };
+
+    let mut sock = TcpStream::connect((host.as_str(), port))
+        .await
+        .map_err(|e| format!("connect: {}", e))?;
+    let req = format!(
+        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: ccc-radio-relay/0.1\r\nIcy-MetaData: 0\r\nConnection: close\r\n\r\n",
+        path, host
+    );
+    sock.write_all(req.as_bytes())
+        .await
+        .map_err(|e| format!("write request: {}", e))?;
+
+    // Drain the response headers (everything up to \r\n\r\n).
+    let mut buf = Vec::with_capacity(4 * 1024);
+    let mut probe = [0u8; 1024];
+    loop {
+        let n = sock.read(&mut probe).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("upstream closed before headers".into());
+        }
+        buf.extend_from_slice(&probe[..n]);
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            // Status line check.
+            let header_text = String::from_utf8_lossy(&buf[..pos]);
+            let first = header_text.lines().next().unwrap_or("");
+            if !first.contains("200") {
+                return Err(format!("upstream HTTP: {}", first));
+            }
+            let body_start = pos + 4;
+            let leftover: Vec<u8> = buf[body_start..].to_vec();
+            state.relay_alive.store(true, Ordering::SeqCst);
+            println!("[radio-engine] relay connected to {}", url_str);
+            if !leftover.is_empty() {
+                let _ = state.tx.send(Bytes::copy_from_slice(&leftover));
+            }
+            // Pump until upstream closes or a live source preempts us.
+            let mut chunk = [0u8; READ_CHUNK];
+            loop {
+                if state.source_alive.load(Ordering::SeqCst) {
+                    println!("[radio-engine] relay yielding to live source");
+                    return Ok(());
+                }
+                // If the operator cleared the URL, drop the connection.
+                if state.settings.snapshot().relay_url != url_str {
+                    return Ok(());
+                }
+                match sock.read(&mut chunk).await {
+                    Ok(0) => return Ok(()),
+                    Ok(n) => {
+                        let _ = state.tx.send(Bytes::copy_from_slice(&chunk[..n]));
+                    }
+                    Err(e) => return Err(format!("read: {}", e)),
+                }
+            }
+        }
+        if buf.len() > 16 * 1024 {
+            return Err("upstream headers too large".into());
         }
     }
 }

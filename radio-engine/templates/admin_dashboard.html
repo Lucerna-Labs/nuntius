@@ -17,7 +17,7 @@
 <section class="cms-grid" style="margin-bottom: 24px;">
   <div class="cms-tile" style="cursor: default;">
     <span class="cms-tile__label">Source</span>
-    <span style="font-size: 22px; font-weight: 700;">{% if source_alive %}Live{% else %}AutoDJ / Idle{% endif %}</span>
+    <span style="font-size: 22px; font-weight: 700;">{% if source_alive %}Live{% else if relay_alive %}Relay{% else %}AutoDJ / Idle{% endif %}</span>
   </div>
   <div class="cms-tile" style="cursor: default;">
     <span class="cms-tile__label">Listeners</span>
@@ -85,6 +85,12 @@
     <span class="cms-field__label">Stream name (icy-name)</span>
     <input class="cms-field__input" type="text" name="stream_name" value="{{ stream_name }}">
     <span class="cms-field__hint">Shown by streaming software / players that read ICY headers.</span>
+  </label>
+  <label class="cms-field">
+    <span class="cms-field__label">Upstream relay URL (optional)</span>
+    <input class="cms-field__input" type="url" name="relay_url" value="{{ relay_url }}"
+           placeholder="http://upstream.example.com:8000/stream">
+    <span class="cms-field__hint">Pull bytes from another Icecast/SHOUTcast and rebroadcast. Live source connections override it; clear the field to disable.</span>
   </label>
   <button class="cms-btn cms-btn--primary" type="submit">Save</button>
 </form>
