@@ -1,0 +1,64 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Playlists — Radio — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Playlists</h1>
+  <p class="cms-page__lede">{{ playlists.len() }} playlist(s). AutoDJ picks the highest-priority one whose schedule matches the current time; otherwise it shuffles your whole library.</p>
+</header>
+
+{% match status %}
+  {% when Some with (msg) %}
+    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/radio/playlists" class="cms-form" style="max-width:560px; margin-bottom: 24px;">
+  <h2 style="margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);">New playlist</h2>
+  <label class="cms-field">
+    <span class="cms-field__label">Name</span>
+    <input class="cms-field__input" type="text" name="name" required placeholder="Morning Show">
+  </label>
+  <button class="cms-btn cms-btn--primary" type="submit">Create</button>
+</form>
+
+{% if playlists.is_empty() %}
+  <p>No playlists yet. Create one to override the default whole-library shuffle.</p>
+{% else %}
+<table class="cms-table">
+  <thead>
+    <tr><th>Name</th><th>Kind</th><th>Schedule</th><th>Priority</th><th>Tracks</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for p in playlists %}
+    <tr>
+      <td><a href="/admin/radio/playlists/{{ p.id }}/edit">{{ p.name }}</a></td>
+      <td>{{ p.kind_str }}</td>
+      <td>{{ p.schedule_human }}</td>
+      <td>{{ p.priority }}</td>
+      <td>{{ p.track_count }}</td>
+      <td>
+        <form method="post" action="/admin/radio/playlists/{{ p.id }}/delete"
+              onsubmit="return confirm('Delete this playlist? Tracks themselves stay in the library.')" style="display:inline">
+          <button class="cms-btn cms-btn--danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Schedule format</h3>
+  <p><strong>Always</strong> — playlist runs whenever no higher-priority playlist matches.</p>
+  <p><strong>TimeWindow</strong> — runs from start to end on selected weekdays. Times are server-local.</p>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Priority</h3>
+  <p>Higher number wins. Default is 0. Use a higher value (e.g. 100) for "this overrides everything else."</p>
+</div>
+{% endblock %}

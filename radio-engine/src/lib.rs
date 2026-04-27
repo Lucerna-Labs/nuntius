@@ -16,6 +16,7 @@
 //! `admin_routes()` for status + library + settings on the API port.
 
 mod library;
+mod playlists;
 
 use askama::Template;
 use axum::{
@@ -163,10 +164,15 @@ struct EngineState {
     library_dir: Arc<PathBuf>,
     /// Live current-track snapshot for /api/radio/nowplaying + dashboard.
     now_playing: Arc<RwLock<Option<NowPlaying>>>,
+    /// Bounded ring buffer of the last few items that aired. Drives
+    /// the public listener page's "previously played" panel.
+    history: Arc<RwLock<std::collections::VecDeque<NowPlaying>>>,
     /// Live database handle (None when constructed via the legacy CLI
     /// `radio` subcommand, which has no DB).
     db: Option<Arc<CccDB>>,
 }
+
+const HISTORY_CAPACITY: usize = 20;
 
 /// What the AutoDJ is currently airing. Cleared when a live source
 /// takes over.
@@ -209,6 +215,9 @@ impl RadioEnginePlugin {
             listener_count: Arc::new(AtomicUsize::new(0)),
             library_dir: Arc::new(library_dir),
             now_playing: Arc::new(RwLock::new(None)),
+            history: Arc::new(RwLock::new(std::collections::VecDeque::with_capacity(
+                HISTORY_CAPACITY,
+            ))),
             db: None,
         };
         Self {
@@ -240,6 +249,9 @@ impl RadioEnginePlugin {
             listener_count: Arc::new(AtomicUsize::new(0)),
             library_dir: Arc::new(library_dir),
             now_playing: Arc::new(RwLock::new(None)),
+            history: Arc::new(RwLock::new(std::collections::VecDeque::with_capacity(
+                HISTORY_CAPACITY,
+            ))),
             db: None,
         };
         Ok(Self {
@@ -283,11 +295,11 @@ impl Plugin for RadioEnginePlugin {
     }
 
     fn routes(&self, _ctx: &AppContext) -> Option<Router> {
-        // Public now-playing endpoint — usable by listeners' web pages,
-        // overlays, etc. JSON, not gated.
+        // Public surface: live listener page + nowplaying JSON.
         let st = self.state.clone();
         Some(
             Router::new()
+                .route("/radio", get(public_listen))
                 .route("/api/radio/nowplaying", get(public_now_playing))
                 .with_state(st),
         )
@@ -319,6 +331,23 @@ impl Plugin for RadioEnginePlugin {
                 .route(
                     "/radio/tracks/:id/delete",
                     post(library::admin_track_delete),
+                )
+                .route(
+                    "/radio/playlists",
+                    get(playlists::admin_list).post(playlists::admin_create),
+                )
+                .route(
+                    "/radio/playlists/:id/edit",
+                    get(playlists::admin_edit_form).post(playlists::admin_edit_post),
+                )
+                .route("/radio/playlists/:id/delete", post(playlists::admin_delete))
+                .route(
+                    "/radio/playlists/:id/tracks",
+                    post(playlists::admin_add_track),
+                )
+                .route(
+                    "/radio/playlists/:id/tracks/:position/remove",
+                    post(playlists::admin_remove_track),
                 )
                 .layer(axum::extract::DefaultBodyLimit::max(
                     library::MAX_TRACK_BYTES,
@@ -616,12 +645,37 @@ async fn public_now_playing(State(state): State<EngineState>) -> Response {
         .read()
         .expect("now_playing poisoned")
         .clone();
+    let history: Vec<NowPlaying> = state
+        .history
+        .read()
+        .expect("history poisoned")
+        .iter()
+        .cloned()
+        .collect();
+    let s = state.settings.snapshot();
     Json(serde_json::json!({
         "now_playing": snap,
+        "history": history,
         "live": state.source_alive.load(Ordering::SeqCst),
         "listeners": state.listener_count.load(Ordering::SeqCst),
+        "stream_name": s.stream_name,
+        "mount_path": s.mount_path,
+        "radio_port": s.port,
     }))
     .into_response()
+}
+
+#[derive(Template)]
+#[template(path = "public_listen.html")]
+struct PublicListenPage {
+    stream_name: String,
+}
+
+async fn public_listen(State(state): State<EngineState>) -> Response {
+    let s = state.settings.snapshot();
+    render(PublicListenPage {
+        stream_name: s.stream_name,
+    })
 }
 
 // ============================================================================
@@ -638,6 +692,7 @@ fn spawn_autodj(state: EngineState) {
 }
 
 async fn autodj_loop(state: EngineState) {
+    use ccc_database::PlaylistKind;
     use rand::seq::SliceRandom;
 
     let db = match state.db.clone() {
@@ -647,9 +702,7 @@ async fn autodj_loop(state: EngineState) {
 
     loop {
         // While a live source is live, the AutoDJ should not stream.
-        // Sleep and re-check.
         if state.source_alive.load(Ordering::SeqCst) {
-            // Mark now-playing as live (no track info — the source decides).
             *state.now_playing.write().expect("np poisoned") = Some(NowPlaying {
                 source: "live",
                 track_id: None,
@@ -662,31 +715,67 @@ async fn autodj_loop(state: EngineState) {
             continue;
         }
 
-        // Build a shuffled queue of tracks. Re-shuffle each time we exhaust
-        // the library so the order varies across cycles.
-        let mut queue: Vec<Track> = db.all_tracks().unwrap_or_default();
+        // Pick the active scheduled playlist if any matches; otherwise
+        // fall back to the whole library shuffled.
+        let active_id: Option<u64> = playlists::pick_active_playlist(&db).map(|p| p.id);
+        let (mut queue, kind, source_label) = match active_id {
+            Some(pid) => match db.get_playlist(pid).ok().flatten() {
+                Some(p) => {
+                    let tracks = db.playlist_tracks(p.id).unwrap_or_default();
+                    if tracks.is_empty() {
+                        (
+                            db.all_tracks().unwrap_or_default(),
+                            PlaylistKind::Shuffle,
+                            format!("library (empty playlist '{}')", p.name),
+                        )
+                    } else {
+                        (tracks, p.kind, format!("playlist '{}'", p.name))
+                    }
+                }
+                None => (
+                    db.all_tracks().unwrap_or_default(),
+                    PlaylistKind::Shuffle,
+                    "library shuffle".to_string(),
+                ),
+            },
+            None => (
+                db.all_tracks().unwrap_or_default(),
+                PlaylistKind::Shuffle,
+                "library shuffle".to_string(),
+            ),
+        };
+
         if queue.is_empty() {
-            // Nothing to play — clear now-playing and back off.
             *state.now_playing.write().expect("np poisoned") = None;
             tokio::time::sleep(Duration::from_secs(5)).await;
             continue;
         }
-        queue.shuffle(&mut rand::thread_rng());
+        if kind == PlaylistKind::Shuffle {
+            queue.shuffle(&mut rand::thread_rng());
+        }
 
+        println!("[autodj] starting pass: {}", source_label);
         for track in queue {
-            // Bail out of the queue on source connect — the OUTER loop
-            // will pick up the live state and spin until disconnect.
             if state.source_alive.load(Ordering::SeqCst) {
                 break;
             }
-            *state.now_playing.write().expect("np poisoned") = Some(NowPlaying {
+            // The active playlist might have changed (different schedule
+            // window now). Bail to the outer loop so we re-pick.
+            let current_active_id = playlists::pick_active_playlist(&db).map(|p| p.id);
+            if current_active_id != active_id {
+                break;
+            }
+
+            let np = NowPlaying {
                 source: "autodj",
                 track_id: Some(track.id),
                 title: track.title.clone(),
                 artist: track.artist.clone(),
                 started_at: unix_now(),
                 duration_seconds: track.duration_seconds,
-            });
+            };
+            *state.now_playing.write().expect("np poisoned") = Some(np.clone());
+            push_history(&state, np);
             println!(
                 "[autodj] now playing: {} - {} ({}s)",
                 track.artist, track.title, track.duration_seconds
@@ -694,6 +783,14 @@ async fn autodj_loop(state: EngineState) {
             stream_track(&state, &track).await;
         }
     }
+}
+
+fn push_history(state: &EngineState, entry: NowPlaying) {
+    let mut h = state.history.write().expect("history poisoned");
+    if h.len() >= HISTORY_CAPACITY {
+        h.pop_back();
+    }
+    h.push_front(entry);
 }
 
 /// Open the file and stream it into the broadcast channel paced at the

@@ -1,0 +1,126 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}{{ name }} — Playlist — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>{{ name }}</h1>
+  <p class="cms-page__lede">{{ tracks.len() }} track(s).</p>
+</header>
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/radio/playlists/{{ id }}/edit" class="cms-form" style="max-width:680px">
+  <label class="cms-field">
+    <span class="cms-field__label">Name</span>
+    <input class="cms-field__input" type="text" name="name" required value="{{ name }}">
+  </label>
+
+  <fieldset class="cms-field">
+    <legend class="cms-field__label">Kind</legend>
+    <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+      <input type="radio" name="kind" value="sequential" {% if kind_str == "sequential" %}checked{% endif %}>
+      <span>Sequential — play tracks in the order below.</span>
+    </label>
+    <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+      <input type="radio" name="kind" value="shuffle" {% if kind_str == "shuffle" %}checked{% endif %}>
+      <span>Shuffle — reshuffle on every pass.</span>
+    </label>
+  </fieldset>
+
+  <fieldset class="cms-field">
+    <legend class="cms-field__label">Schedule</legend>
+    <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+      <input type="radio" name="schedule" value="always" {% if schedule_kind == "always" %}checked{% endif %}>
+      <span>Always — eligible whenever no higher-priority playlist matches.</span>
+    </label>
+    <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
+      <input type="radio" name="schedule" value="window" {% if schedule_kind == "window" %}checked{% endif %}>
+      <span>Time window — only during specific hours/days (below).</span>
+    </label>
+  </fieldset>
+
+  <div class="cms-field">
+    <span class="cms-field__label">Window — start time</span>
+    <input class="cms-field__input" type="time" name="start_time" value="{{ start_time }}">
+  </div>
+  <div class="cms-field">
+    <span class="cms-field__label">Window — end time</span>
+    <input class="cms-field__input" type="time" name="end_time" value="{{ end_time }}">
+  </div>
+
+  <fieldset class="cms-field">
+    <legend class="cms-field__label">Days</legend>
+    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+      <label><input type="checkbox" name="day_sun" value="1" {% if day_sun %}checked{% endif %}> Sun</label>
+      <label><input type="checkbox" name="day_mon" value="1" {% if day_mon %}checked{% endif %}> Mon</label>
+      <label><input type="checkbox" name="day_tue" value="1" {% if day_tue %}checked{% endif %}> Tue</label>
+      <label><input type="checkbox" name="day_wed" value="1" {% if day_wed %}checked{% endif %}> Wed</label>
+      <label><input type="checkbox" name="day_thu" value="1" {% if day_thu %}checked{% endif %}> Thu</label>
+      <label><input type="checkbox" name="day_fri" value="1" {% if day_fri %}checked{% endif %}> Fri</label>
+      <label><input type="checkbox" name="day_sat" value="1" {% if day_sat %}checked{% endif %}> Sat</label>
+    </div>
+  </fieldset>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Priority</span>
+    <input class="cms-field__input" type="number" name="priority" value="{{ priority }}" min="-1000" max="1000">
+    <span class="cms-field__hint">Higher beats lower when multiple playlists match. 0 is fine for most.</span>
+  </label>
+
+  <div style="display:flex; gap:8px;">
+    <button class="cms-btn cms-btn--primary" type="submit">Save</button>
+    <a class="cms-btn" href="/admin/radio/playlists" style="display:inline-flex; align-items:center; padding:10px 16px;">Back</a>
+  </div>
+</form>
+
+<section class="cms-section" style="margin-top: 32px;">
+  <h2>Tracks in this playlist</h2>
+  {% if tracks.is_empty() %}
+    <p>None yet. Add some from the library below.</p>
+  {% else %}
+  <table class="cms-table" style="margin-bottom: 16px;">
+    <thead>
+      <tr><th>#</th><th>Title</th><th>Artist</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for t in tracks %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ t.title }}</td>
+        <td>{{ t.artist }}</td>
+        <td>
+          <form method="post" action="/admin/radio/playlists/{{ id }}/tracks/{{ t.position }}/remove" style="display:inline">
+            <button class="cms-btn cms-btn--danger" type="submit">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<section class="cms-section">
+  <h2>Add from library</h2>
+  {% if available_tracks.is_empty() %}
+    <p>No tracks in the library yet — upload some at <a href="/admin/radio/tracks">Track library</a>.</p>
+  {% else %}
+  <form method="post" action="/admin/radio/playlists/{{ id }}/tracks" class="cms-form" style="max-width: 560px;">
+    <label class="cms-field">
+      <span class="cms-field__label">Pick a track</span>
+      <select class="cms-field__input" name="track_id" required>
+        {% for t in available_tracks %}
+          <option value="{{ t.id }}">{{ t.artist }} — {{ t.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="cms-btn cms-btn--primary" type="submit">Add to playlist</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ stream_name }} — Listen Live</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+  <style>
+    .listen { max-width: 720px; margin: 60px auto; padding: 0 24px; }
+    .listen h1 { margin: 0 0 8px; }
+    .listen .meta { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; }
+    .listen .player { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .listen .now { font-size: 22px; font-weight: 700; margin: 16px 0 4px; }
+    .listen .now small { color: var(--text-dim); font-size: 14px; font-weight: normal; display: block; margin-top: 4px; }
+    .listen audio { width: 100%; margin-top: 16px; }
+    .listen .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ff4d4d; margin-right: 6px; vertical-align: middle; animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .listen .history { margin-top: 32px; }
+    .listen .history h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); }
+    .listen .history ol { list-style: decimal; padding-left: 24px; }
+    .listen .history li { padding: 4px 0; color: var(--text-dim); }
+    .listen .history li strong { color: var(--text); }
+  </style>
+</head>
+<body class="cms">
+  <main class="listen">
+    <h1>{{ stream_name }}</h1>
+    <div class="meta">
+      <span class="pulse"></span><span id="status">Connecting…</span>
+      &nbsp;·&nbsp; <span id="listeners">— listeners</span>
+    </div>
+
+    <div class="player">
+      <div class="now" id="now-title">Loading…</div>
+      <small class="now"><span id="now-artist"></span></small>
+      <audio id="audio" controls preload="none"></audio>
+    </div>
+
+    <section class="history">
+      <h2>Previously played</h2>
+      <ol id="history">
+        <li>—</li>
+      </ol>
+    </section>
+  </main>
+
+  <script>
+    // The radio engine listens on a dedicated TCP port (not the API port),
+    // so we build the audio URL from window.location.hostname + the
+    // server-supplied radio_port + mount_path. This keeps the page
+    // working on any deployment without operator config.
+    const audio = document.getElementById('audio');
+    let lastTrackId = null;
+
+    async function refresh() {
+      try {
+        const r = await fetch('/api/radio/nowplaying', { cache: 'no-store' });
+        const data = await r.json();
+
+        document.getElementById('status').textContent = data.live ? 'Live broadcast' : 'On air';
+        document.getElementById('listeners').textContent =
+          data.listeners + ' listener' + (data.listeners === 1 ? '' : 's');
+
+        if (data.now_playing) {
+          document.getElementById('now-title').textContent = data.now_playing.title || '—';
+          document.getElementById('now-artist').textContent = data.now_playing.artist || '';
+          lastTrackId = data.now_playing.track_id;
+        } else {
+          document.getElementById('now-title').textContent = 'Off air';
+          document.getElementById('now-artist').textContent = '';
+        }
+
+        if (audio.src === '' || audio.src === window.location.href) {
+          // Set the streaming URL once, on the first poll.
+          const streamUrl = window.location.protocol + '//' +
+            window.location.hostname + ':' + data.radio_port + data.mount_path;
+          audio.src = streamUrl;
+        }
+
+        const ol = document.getElementById('history');
+        if (data.history && data.history.length) {
+          ol.innerHTML = data.history.map(h =>
+            '<li><strong>' + escapeHtml(h.title) + '</strong> — ' + escapeHtml(h.artist) + '</li>'
+          ).join('');
+        }
+      } catch (e) {
+        document.getElementById('status').textContent = 'Connection error';
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s || '').replace(/[&<>"]/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'
+      }[c]));
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

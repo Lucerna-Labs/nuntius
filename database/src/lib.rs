@@ -42,6 +42,16 @@ const ADS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("ads");
 const FEDERATION_FOLLOWERS_TABLE: TableDefinition<&str, &[u8]> =
     TableDefinition::new("federation_followers");
 
+/// Radio playlists.
+/// Key: Playlist ID (u64)
+/// Value: Serialized `Playlist`
+const PLAYLISTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("radio_playlists");
+/// Track entries within a playlist, indexed for fast scan.
+/// Key: (playlist_id, position) — gives ordered range scans per playlist.
+/// Value: track_id (u64)
+const PLAYLIST_TRACKS_TABLE: TableDefinition<(u64, u64), u64> =
+    TableDefinition::new("radio_playlist_tracks");
+
 /// The main table where tracks are stored.
 /// Key: Track ID (u64)
 /// Value: Serialized Track
@@ -219,6 +229,64 @@ pub struct Track {
     pub created_at: u64,
 }
 
+/// How AutoDJ traverses a playlist when it's active.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlaylistKind {
+    /// Walk tracks in the order the operator added them.
+    #[default]
+    Sequential,
+    /// Reshuffle the playlist each pass.
+    Shuffle,
+}
+
+impl PlaylistKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlaylistKind::Sequential => "sequential",
+            PlaylistKind::Shuffle => "shuffle",
+        }
+    }
+    pub fn from_form(s: &str) -> Self {
+        match s {
+            "shuffle" => PlaylistKind::Shuffle,
+            _ => PlaylistKind::Sequential,
+        }
+    }
+}
+
+/// When this playlist should be selected by AutoDJ.
+///
+/// `Always` plays whenever no higher-priority playlist matches.
+/// `TimeWindow` plays only during the specified daily window on the
+/// specified weekdays. Times are minutes-since-midnight in the
+/// server's local time.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub enum PlaylistSchedule {
+    #[default]
+    Always,
+    TimeWindow {
+        /// 0..=1439 (00:00 to 23:59).
+        start_minute: u16,
+        end_minute: u16,
+        /// Bit mask: bit 0 = Sunday, bit 1 = Monday, ... bit 6 = Saturday.
+        /// 0x7F = every day. 0 = never (effectively disabled).
+        days_mask: u8,
+    },
+}
+
+/// A named, scheduled collection of tracks.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Playlist {
+    pub id: u64,
+    pub name: String,
+    pub kind: PlaylistKind,
+    pub schedule: PlaylistSchedule,
+    /// Higher beats lower when multiple playlists match the current time.
+    pub priority: i32,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
 /// Publication state of a podcast episode.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EpisodeStatus {
@@ -334,6 +402,8 @@ impl CccDB {
             write_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
             write_txn.open_table(ADS_TABLE)?;
             write_txn.open_table(FEDERATION_FOLLOWERS_TABLE)?;
+            write_txn.open_table(PLAYLISTS_TABLE)?;
+            write_txn.open_table(PLAYLIST_TRACKS_TABLE)?;
             write_txn.open_table(TRACKS_TABLE)?;
             write_txn.open_table(PODCASTS_TABLE)?;
             write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
@@ -963,6 +1033,114 @@ impl CccDB {
             .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
             .collect();
         out.sort_by(|a, b| b.followed_at.cmp(&a.followed_at));
+        Ok(out)
+    }
+
+    // --- RADIO PLAYLISTS ---
+
+    pub fn upsert_playlist(&self, p: &Playlist) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(PLAYLISTS_TABLE)?;
+            let bytes = bincode::serialize(p).unwrap();
+            table.insert(p.id, bytes.as_slice())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn get_playlist(&self, id: u64) -> Result<Option<Playlist>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(PLAYLISTS_TABLE)?;
+        Ok(table
+            .get(id)?
+            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+    }
+
+    /// Drops the playlist row AND every PlaylistTracks entry for it.
+    pub fn delete_playlist(&self, id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut main = write_txn.open_table(PLAYLISTS_TABLE)?;
+            main.remove(id)?;
+            let mut tracks = write_txn.open_table(PLAYLIST_TRACKS_TABLE)?;
+            // Drop every entry whose key starts with this playlist_id.
+            tracks.retain(|key, _value| {
+                let (pid, _) = key;
+                pid != id
+            })?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn all_playlists(&self) -> Result<Vec<Playlist>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(PLAYLISTS_TABLE)?;
+        let mut out: Vec<Playlist> = table
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
+            .collect();
+        out.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        Ok(out)
+    }
+
+    /// Append a track at the end of the playlist.
+    pub fn append_to_playlist(&self, playlist_id: u64, track_id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut tracks = write_txn.open_table(PLAYLIST_TRACKS_TABLE)?;
+            // Find the next free position by scanning the playlist's range.
+            let mut next_pos: u64 = 0;
+            for r in tracks.range((playlist_id, 0)..(playlist_id, u64::MAX))? {
+                let (key_guard, _) = r?;
+                let (_, pos) = key_guard.value();
+                next_pos = next_pos.max(pos + 1);
+            }
+            tracks.insert((playlist_id, next_pos), track_id)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Remove the entry at (playlist_id, position).
+    pub fn remove_from_playlist(&self, playlist_id: u64, position: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut tracks = write_txn.open_table(PLAYLIST_TRACKS_TABLE)?;
+            tracks.remove((playlist_id, position))?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Return (position, track_id) pairs in playlist order.
+    pub fn playlist_track_ids(&self, playlist_id: u64) -> Result<Vec<(u64, u64)>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(PLAYLIST_TRACKS_TABLE)?;
+        let mut out = Vec::new();
+        for r in table.range((playlist_id, 0)..(playlist_id, u64::MAX))? {
+            let (key_guard, val_guard) = r?;
+            let (_, pos) = key_guard.value();
+            out.push((pos, val_guard.value()));
+        }
+        Ok(out)
+    }
+
+    /// Resolve a playlist's tracks to actual `Track` objects, preserving order.
+    pub fn playlist_tracks(&self, playlist_id: u64) -> Result<Vec<Track>, Error> {
+        let entries = self.playlist_track_ids(playlist_id)?;
+        let mut out = Vec::with_capacity(entries.len());
+        for (_pos, tid) in entries {
+            if let Some(t) = self.get_track(tid)? {
+                out.push(t);
+            }
+        }
         Ok(out)
     }
 }
