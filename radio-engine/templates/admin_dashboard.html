@@ -34,6 +34,22 @@
 </section>
 
 <section class="cms-section" style="margin-bottom: 24px;">
+  <h2>Recording</h2>
+  {% match recording_path %}
+    {% when Some with (p) %}
+      <p>Recording to <code style="word-break:break-all;">{{ p }}</code>.</p>
+      <form method="post" action="/admin/radio/record/stop">
+        <button class="cms-btn cms-btn--danger" type="submit">Stop recording</button>
+      </form>
+    {% when None %}
+      <p>Off air. Recording captures every byte broadcast — both AutoDJ and live source — to a timestamped file in the library directory.</p>
+      <form method="post" action="/admin/radio/record/start">
+        <button class="cms-btn cms-btn--primary" type="submit">Start recording</button>
+      </form>
+  {% endmatch %}
+</section>
+
+<section class="cms-section" style="margin-bottom: 24px;">
   <h2>Now playing</h2>
   {% match now_playing_title %}
     {% when Some with (title) %}

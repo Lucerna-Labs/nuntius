@@ -167,12 +167,26 @@ struct EngineState {
     /// Bounded ring buffer of the last few items that aired. Drives
     /// the public listener page's "previously played" panel.
     history: Arc<RwLock<std::collections::VecDeque<NowPlaying>>>,
+    /// On-air recording state. `Some(...)` means the recording task is
+    /// active and writing every broadcast byte to `path`.
+    recording: Arc<RwLock<Option<RecordingHandle>>>,
     /// Live database handle (None when constructed via the legacy CLI
     /// `radio` subcommand, which has no DB).
     db: Option<Arc<CccDB>>,
 }
 
+#[derive(Clone)]
+pub struct RecordingHandle {
+    pub path: String,
+    pub started_at: u64,
+}
+
 const HISTORY_CAPACITY: usize = 20;
+
+/// Bytes of audio between SHOUTcast/Icecast metadata blocks. 8192 is
+/// the de-facto default; client players (VLC, foobar2000, browsers)
+/// negotiate via the `icy-metaint` response header.
+const ICY_METAINT: usize = 8192;
 
 /// What the AutoDJ is currently airing. Cleared when a live source
 /// takes over.
@@ -218,6 +232,7 @@ impl RadioEnginePlugin {
             history: Arc::new(RwLock::new(std::collections::VecDeque::with_capacity(
                 HISTORY_CAPACITY,
             ))),
+            recording: Arc::new(RwLock::new(None)),
             db: None,
         };
         Self {
@@ -252,6 +267,7 @@ impl RadioEnginePlugin {
             history: Arc::new(RwLock::new(std::collections::VecDeque::with_capacity(
                 HISTORY_CAPACITY,
             ))),
+            recording: Arc::new(RwLock::new(None)),
             db: None,
         };
         Ok(Self {
@@ -321,6 +337,7 @@ impl Plugin for RadioEnginePlugin {
             ..self.state.clone()
         };
         spawn_autodj(st.clone());
+        spawn_recorder(st.clone());
         Some(
             Router::new()
                 .route("/radio", get(admin_get).post(admin_post))
@@ -349,6 +366,8 @@ impl Plugin for RadioEnginePlugin {
                     "/radio/playlists/:id/tracks/:position/remove",
                     post(playlists::admin_remove_track),
                 )
+                .route("/radio/record/start", post(admin_record_start))
+                .route("/radio/record/stop", post(admin_record_stop))
                 .layer(axum::extract::DefaultBodyLimit::max(
                     library::MAX_TRACK_BYTES,
                 ))
@@ -493,6 +512,10 @@ async fn handle_connection(
         Ok(())
     } else if method.eq_ignore_ascii_case("GET") && path == snap.mount_path {
         // Listener.
+        let wants_metadata = header_text.lines().any(|l| {
+            l.to_ascii_lowercase().starts_with("icy-metadata:") && l.trim().ends_with('1')
+        });
+
         let mut headers = format!(
             "HTTP/1.0 200 OK\r\n\
              Content-Type: {}\r\n\
@@ -501,6 +524,9 @@ async fn handle_connection(
              Connection: close\r\n",
             snap.content_type, snap.stream_name
         );
+        if wants_metadata {
+            headers.push_str(&format!("icy-metaint: {}\r\n", ICY_METAINT));
+        }
         headers.push_str("\r\n");
         if sock.write_all(headers.as_bytes()).await.is_err() {
             return Ok(());
@@ -508,18 +534,54 @@ async fn handle_connection(
 
         let mut rx = state.tx.subscribe();
         state.listener_count.fetch_add(1, Ordering::SeqCst);
-        loop {
-            match rx.recv().await {
-                Ok(chunk) => {
-                    if sock.write_all(&chunk).await.is_err() {
-                        break;
+
+        if wants_metadata {
+            // Per-listener byte counter + last-sent metadata to suppress
+            // redundant updates between tracks.
+            let mut bytes_since_meta: usize = 0;
+            let mut last_meta = String::new();
+            'meta: loop {
+                let chunk = match rx.recv().await {
+                    Ok(c) => c,
+                    Err(broadcast::error::RecvError::Lagged(_)) => break 'meta,
+                    Err(broadcast::error::RecvError::Closed) => break 'meta,
+                };
+                let mut i = 0usize;
+                while i < chunk.len() {
+                    let remaining = ICY_METAINT - bytes_since_meta;
+                    let take = remaining.min(chunk.len() - i);
+                    if sock.write_all(&chunk[i..i + take]).await.is_err() {
+                        break 'meta;
+                    }
+                    bytes_since_meta += take;
+                    i += take;
+                    if bytes_since_meta >= ICY_METAINT {
+                        let cur = current_icy_title(&state);
+                        let block = if cur != last_meta {
+                            last_meta.clone_from(&cur);
+                            encode_icy_metadata(&cur)
+                        } else {
+                            vec![0u8]
+                        };
+                        if sock.write_all(&block).await.is_err() {
+                            break 'meta;
+                        }
+                        bytes_since_meta = 0;
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    // Listener too slow — close so they can reconnect cleanly.
-                    break;
+            }
+        } else {
+            // Plain listener — no metadata interleaving.
+            loop {
+                match rx.recv().await {
+                    Ok(chunk) => {
+                        if sock.write_all(&chunk).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => break,
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
-                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
         state.listener_count.fetch_sub(1, Ordering::SeqCst);
@@ -584,6 +646,7 @@ struct AdminDashboardPage {
     track_count: usize,
     now_playing_title: Option<String>,
     now_playing_artist: Option<String>,
+    recording_path: Option<String>,
     saved: Option<bool>,
 }
 
@@ -596,6 +659,12 @@ async fn admin_get(State(state): State<EngineState>) -> Response {
         .and_then(|db| db.all_tracks().ok())
         .map(|v| v.len())
         .unwrap_or(0);
+    let recording_path = state
+        .recording
+        .read()
+        .expect("recording poisoned")
+        .as_ref()
+        .map(|h| h.path.clone());
     render(AdminDashboardPage {
         source_alive: state.source_alive.load(Ordering::SeqCst),
         listeners: state.listener_count.load(Ordering::SeqCst),
@@ -613,6 +682,7 @@ async fn admin_get(State(state): State<EngineState>) -> Response {
                 Some(n.artist.clone())
             }
         }),
+        recording_path,
         saved: None,
     })
 }
@@ -785,6 +855,95 @@ async fn autodj_loop(state: EngineState) {
     }
 }
 
+// ============================================================================
+// Recording — dumps every broadcast byte to disk while enabled
+// ============================================================================
+
+fn spawn_recorder(state: EngineState) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SPAWNED: AtomicBool = AtomicBool::new(false);
+    if SPAWNED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tokio::spawn(recorder_loop(state));
+}
+
+async fn recorder_loop(state: EngineState) {
+    use tokio::fs::File;
+    use tokio::io::AsyncWriteExt as _;
+
+    let mut rx = state.tx.subscribe();
+    let mut current_path: Option<String> = None;
+    let mut current_file: Option<File> = None;
+
+    loop {
+        match rx.recv().await {
+            Ok(chunk) => {
+                let want_path = state
+                    .recording
+                    .read()
+                    .expect("recording poisoned")
+                    .as_ref()
+                    .map(|h| h.path.clone());
+                if want_path != current_path {
+                    // State changed — close any open file and open the new one.
+                    if let Some(mut f) = current_file.take() {
+                        let _ = f.flush().await;
+                    }
+                    if let Some(p) = &want_path {
+                        if let Some(parent) = std::path::Path::new(p).parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        match File::create(p).await {
+                            Ok(f) => current_file = Some(f),
+                            Err(e) => {
+                                eprintln!("[radio-engine] could not open recording {}: {}", p, e);
+                            }
+                        }
+                    }
+                    current_path = want_path;
+                }
+                if let Some(f) = current_file.as_mut() {
+                    let _ = f.write_all(&chunk).await;
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+fn extension_for_mime(mime: &str) -> &'static str {
+    match mime {
+        "audio/mpeg" => "mp3",
+        "audio/aac" | "audio/mp4" => "m4a",
+        "audio/ogg" | "application/ogg" => "ogg",
+        "audio/flac" => "flac",
+        _ => "bin",
+    }
+}
+
+async fn admin_record_start(State(state): State<EngineState>) -> Response {
+    let snap = state.settings.snapshot();
+    let ext = extension_for_mime(&snap.content_type);
+    let now = unix_now();
+    let mut path = state.library_dir.as_ref().clone();
+    path.push("recordings");
+    path.push(format!("recording-{}.{}", now, ext));
+    *state.recording.write().expect("recording poisoned") = Some(RecordingHandle {
+        path: path.to_string_lossy().to_string(),
+        started_at: now,
+    });
+    println!("[radio-engine] recording started -> {}", path.display());
+    Redirect::to("/admin/radio").into_response()
+}
+
+async fn admin_record_stop(State(state): State<EngineState>) -> Response {
+    *state.recording.write().expect("recording poisoned") = None;
+    println!("[radio-engine] recording stopped");
+    Redirect::to("/admin/radio").into_response()
+}
+
 fn push_history(state: &EngineState, entry: NowPlaying) {
     let mut h = state.history.write().expect("history poisoned");
     if h.len() >= HISTORY_CAPACITY {
@@ -842,6 +1001,37 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Render the current track as an ICY-style "Artist - Title" string,
+/// or fall back to the station name when nothing is playing. Returned
+/// without surrounding quotes — the encoder wraps it in `StreamTitle='..';`.
+fn current_icy_title(state: &EngineState) -> String {
+    let np = state.now_playing.read().expect("np poisoned").clone();
+    let snap = state.settings.snapshot();
+    match np {
+        Some(n) if !n.artist.is_empty() => format!("{} - {}", n.artist, n.title),
+        Some(n) => n.title,
+        None => snap.stream_name,
+    }
+}
+
+/// Build the byte sequence for one ICY metadata block:
+/// `[length/16] StreamTitle='<title>';\0\0...` padded to a 16-byte
+/// boundary. Single quotes inside the title are stripped because
+/// they'd unbalance the StreamTitle delimiters.
+fn encode_icy_metadata(title: &str) -> Vec<u8> {
+    let safe_title: String = title.chars().filter(|c| *c != '\'').collect();
+    let mut payload = format!("StreamTitle='{}';", safe_title).into_bytes();
+    // Per spec: each block is `(len/16) blocks of 16 bytes`. Round up.
+    let len = payload.len();
+    let blocks = len.div_ceil(16).min(255);
+    let target = blocks * 16;
+    payload.resize(target, 0);
+    let mut out = Vec::with_capacity(1 + target);
+    out.push(blocks as u8);
+    out.extend_from_slice(&payload);
+    out
 }
 
 fn render<T: Template>(tmpl: T) -> Response {
