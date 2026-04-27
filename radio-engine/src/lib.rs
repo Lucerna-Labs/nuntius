@@ -16,6 +16,7 @@
 //! `admin_routes()` for status + library + settings on the API port.
 
 mod library;
+mod mixer;
 mod playlists;
 
 use askama::Template;
@@ -879,6 +880,12 @@ async fn autodj_loop(state: EngineState) {
         None => return,
     };
 
+    // If the PCM-mixed crossfade pipeline fails to spawn (e.g. ffmpeg
+    // missing or the encoder dies), we record that here and stop trying
+    // to spawn it again — every subsequent pass falls through to the
+    // per-track raw pacer below.
+    let mut mixer_disabled = false;
+
     loop {
         // Live source > relay > AutoDJ. Pause if either upstream is feeding bytes.
         if state.source_alive.load(Ordering::SeqCst) {
@@ -904,6 +911,31 @@ async fn autodj_loop(state: EngineState) {
             });
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
+        }
+
+        // When crossfade is enabled, prefer the PCM-mixed pipeline:
+        // a single persistent ffmpeg encoder with per-track decoders
+        // mixed sample-wise across the crossfade window. Falls through
+        // to the per-track raw pacer if the pipeline can't be started.
+        let xf = state.settings.snapshot().crossfade_seconds;
+        if xf > 0 && !mixer_disabled {
+            match mixer::run_crossfaded_autodj(state.clone()).await {
+                Ok(()) => {
+                    // Mixer returned cleanly — preemption, schedule
+                    // change, or empty library. Re-enter the outer
+                    // loop, which will sleep on preemption or re-pick
+                    // the queue for the next mixed pass.
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[autodj] crossfade pipeline failed ({}); falling back to per-track pacer",
+                        e
+                    );
+                    mixer_disabled = true;
+                }
+            }
         }
 
         // Pick the active scheduled playlist if any matches; otherwise
@@ -1292,7 +1324,7 @@ async fn admin_record_stop(State(state): State<EngineState>) -> Response {
     Redirect::to("/admin/radio").into_response()
 }
 
-fn push_history(state: &EngineState, entry: NowPlaying) {
+pub(crate) fn push_history(state: &EngineState, entry: NowPlaying) {
     let mut h = state.history.write().expect("history poisoned");
     if h.len() >= HISTORY_CAPACITY {
         h.pop_back();
@@ -1422,7 +1454,7 @@ async fn stream_track_raw_pacing(state: &EngineState, track: &Track) {
     }
 }
 
-fn unix_now() -> u64 {
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
