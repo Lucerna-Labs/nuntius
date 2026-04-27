@@ -213,6 +213,10 @@ pub struct Subscriber {
 /// `file_path` points at the on-disk audio file the AutoDJ streams.
 /// `duration_seconds` and `size_bytes` together let the streaming
 /// pacer compute the effective bitrate and chunk the file at real time.
+/// `target_gain_db` is the EBU R128-derived gain adjustment that
+/// brings the track to the station's target loudness (-23 LUFS by
+/// default). Measured asynchronously via ffmpeg's loudnorm filter
+/// after upload; `None` until measurement completes.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Track {
     pub id: u64,
@@ -227,6 +231,9 @@ pub struct Track {
     pub size_bytes: u64,
     pub duration_seconds: u64,
     pub created_at: u64,
+    /// EBU R128 loudness offset, negative or positive dB. None = unmeasured.
+    #[serde(default)]
+    pub target_gain_db: Option<f32>,
 }
 
 /// How AutoDJ traverses a playlist when it's active.

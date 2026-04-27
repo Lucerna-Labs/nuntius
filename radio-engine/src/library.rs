@@ -35,6 +35,7 @@ struct TrackRow {
     duration_human: String,
     size_human: String,
     added_human: String,
+    gain_human: String,
 }
 
 pub async fn admin_track_list(State(state): State<EngineState>) -> Response {
@@ -110,13 +111,73 @@ pub async fn admin_track_upload(
         size_bytes: bytes.len() as u64,
         duration_seconds: probed.duration_seconds,
         created_at: now,
+        target_gain_db: None,
     };
     if let Err(e) = db.upsert_track(&track) {
         let _ = std::fs::remove_file(&full);
         return render_list(&state, Some(&format!("could not save track: {}", e)));
     }
 
+    // Measure EBU R128 loudness in the background and store target_gain.
+    // Failure (no ffmpeg, file unreadable, etc.) is non-fatal: track plays
+    // ungained.
+    let db_clone = db.clone();
+    let path = full.clone();
+    let track_id = id;
+    tokio::spawn(async move {
+        if let Some(gain_db) = measure_loudness_offset(&path).await {
+            if let Ok(Some(mut t)) = db_clone.get_track(track_id) {
+                t.target_gain_db = Some(gain_db);
+                let _ = db_clone.upsert_track(&t);
+                println!(
+                    "[radio-engine] measured {} -> target gain {:+.1} dB",
+                    path.display(),
+                    gain_db
+                );
+            }
+        } else {
+            println!(
+                "[radio-engine] could not measure loudness for {}",
+                path.display()
+            );
+        }
+    });
+
     Redirect::to("/admin/radio/tracks").into_response()
+}
+
+/// Run ffmpeg's two-pass `loudnorm` filter with `print_format=json`,
+/// parse the integrated loudness, return the dB delta needed to bring
+/// the track to -23 LUFS (EBU R128). On any error returns None.
+async fn measure_loudness_offset(path: &PathBuf) -> Option<f32> {
+    use tokio::process::Command;
+    let output = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-nostats")
+        .arg("-i")
+        .arg(path)
+        .arg("-af")
+        .arg("loudnorm=I=-23:LRA=7:TP=-2:print_format=json")
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .output()
+        .await
+        .ok()?;
+    // ffmpeg's loudnorm prints a JSON block to stderr. Find it.
+    let text = String::from_utf8_lossy(&output.stderr);
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    let json: serde_json::Value = serde_json::from_str(&text[start..=end]).ok()?;
+    let measured: f32 = json
+        .get("input_i")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())?;
+    // gain = target − measured.  e.g. measured = -18, target = -23 => gain = -5
+    Some(-23.0 - measured)
 }
 
 pub async fn admin_track_delete(State(state): State<EngineState>, Path(id): Path<u64>) -> Response {
@@ -151,6 +212,10 @@ fn render_list(state: &EngineState, error: Option<&str>) -> Response {
             duration_human: format_duration(t.duration_seconds),
             size_human: human_bytes(t.size_bytes),
             added_human: format_unix(t.created_at),
+            gain_human: match t.target_gain_db {
+                Some(g) => format!("{:+.1} dB", g),
+                None => "—".into(),
+            },
         })
         .collect();
     let page = TracksPage {

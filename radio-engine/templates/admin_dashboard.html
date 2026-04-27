@@ -92,6 +92,27 @@
            placeholder="http://upstream.example.com:8000/stream">
     <span class="cms-field__hint">Pull bytes from another Icecast/SHOUTcast and rebroadcast. Live source connections override it; clear the field to disable.</span>
   </label>
+
+  <hr style="border: none; border-top: 1px solid var(--border); margin: 16px 0;">
+  <h2 style="margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);">AutoDJ encoding (requires ffmpeg)</h2>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Station bitrate (kbps)</span>
+    <input class="cms-field__input" type="number" name="station_bitrate_kbps" value="{{ station_bitrate_kbps }}" min="32" max="320" step="32" required>
+    <span class="cms-field__hint">Output bitrate for re-encoded library tracks. 128 is good for music; 192–256 sounds noticeably better.</span>
+  </label>
+
+  <label style="display:flex; gap:8px; align-items:flex-start; padding:6px 0;">
+    <input type="checkbox" name="apply_loudness_normalization" value="1" {% if apply_loudness_normalization %}checked{% endif %} style="margin-top: 4px;">
+    <span>Apply loudness normalization (EBU R128, target −23 LUFS). Each track's gain is measured at upload time.</span>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Crossfade (seconds)</span>
+    <input class="cms-field__input" type="number" name="crossfade_seconds" value="{{ crossfade_seconds }}" min="0" max="10" required>
+    <span class="cms-field__hint">Duration of the fade-out at track end and fade-in at the next track's start. 0 = hard cuts. 2 is gentle; 5+ is overlapping radio-style.</span>
+  </label>
+
   <button class="cms-btn cms-btn--primary" type="submit">Save</button>
 </form>
 {% endblock %}

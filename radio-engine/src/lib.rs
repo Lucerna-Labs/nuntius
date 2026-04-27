@@ -80,6 +80,46 @@ pub struct RadioSettings {
     /// Empty string = disabled.
     #[serde(default)]
     pub relay_url: String,
+    /// Output bitrate (kbps) the AutoDJ ffmpeg encoder uses when
+    /// re-encoding library tracks for broadcast. Higher = better
+    /// quality + more bandwidth per listener. 128 is a good default
+    /// for music radio.
+    #[serde(default = "default_station_bitrate")]
+    pub station_bitrate_kbps: u32,
+    /// Master switch for normalization at AutoDJ playback. When true,
+    /// each track's measured target_gain_db is applied via ffmpeg's
+    /// volume filter. Tracks without a measurement play unchanged.
+    #[serde(default = "default_loudness_norm")]
+    pub apply_loudness_normalization: bool,
+    /// Crossfade duration in seconds at track boundaries (0 = hard cuts).
+    #[serde(default = "default_crossfade_seconds")]
+    pub crossfade_seconds: u32,
+    /// Additional mount points at different bitrates. Each variant
+    /// runs its own ffmpeg transcoder fed from the master broadcast
+    /// stream. Configure in `ccc.toml`:
+    /// ```toml
+    /// [[plugin.radio-engine.variant_mounts]]
+    /// path = "/listen-low.mp3"
+    /// bitrate_kbps = 64
+    /// ```
+    #[serde(default)]
+    pub variant_mounts: Vec<VariantMountSetting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariantMountSetting {
+    pub path: String,
+    pub bitrate_kbps: u32,
+}
+
+fn default_station_bitrate() -> u32 {
+    128
+}
+fn default_loudness_norm() -> bool {
+    true
+}
+fn default_crossfade_seconds() -> u32 {
+    2
 }
 
 fn default_library_dir() -> String {
@@ -96,6 +136,10 @@ impl Default for RadioSettings {
             stream_name: "Creator Command Center Radio".into(),
             library_dir: default_library_dir(),
             relay_url: String::new(),
+            station_bitrate_kbps: default_station_bitrate(),
+            apply_loudness_normalization: default_loudness_norm(),
+            crossfade_seconds: default_crossfade_seconds(),
+            variant_mounts: Vec::new(),
         }
     }
 }
@@ -180,6 +224,9 @@ struct EngineState {
     /// True iff the relay task currently has an upstream connection
     /// and is pumping bytes. AutoDJ pauses when relay_alive == true.
     relay_alive: Arc<AtomicBool>,
+    /// Map from variant mount path → its dedicated broadcast channel.
+    /// One ffmpeg subprocess per variant transcodes the master stream.
+    variants: Arc<RwLock<std::collections::HashMap<String, broadcast::Sender<Bytes>>>>,
     /// Live database handle (None when constructed via the legacy CLI
     /// `radio` subcommand, which has no DB).
     db: Option<Arc<CccDB>>,
@@ -244,6 +291,7 @@ impl RadioEnginePlugin {
             ))),
             recording: Arc::new(RwLock::new(None)),
             relay_alive: Arc::new(AtomicBool::new(false)),
+            variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
         };
         Self {
@@ -280,6 +328,7 @@ impl RadioEnginePlugin {
             ))),
             recording: Arc::new(RwLock::new(None)),
             relay_alive: Arc::new(AtomicBool::new(false)),
+            variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
         };
         Ok(Self {
@@ -351,6 +400,7 @@ impl Plugin for RadioEnginePlugin {
         spawn_autodj(st.clone());
         spawn_recorder(st.clone());
         spawn_relay(st.clone());
+        spawn_variant_transcoders(st.clone());
         Some(
             Router::new()
                 .route("/radio", get(admin_get).post(admin_post))
@@ -523,8 +573,25 @@ async fn handle_connection(
         *state.now_playing.write().expect("np poisoned") = None;
         println!("[radio-engine] source disconnected from {}", peer);
         Ok(())
-    } else if method.eq_ignore_ascii_case("GET") && path == snap.mount_path {
-        // Listener.
+    } else if method.eq_ignore_ascii_case("GET")
+        && (path == snap.mount_path
+            || state
+                .variants
+                .read()
+                .expect("variants poisoned")
+                .contains_key(path))
+    {
+        // Listener — for the master mount or any configured variant.
+        let variant_tx: Option<broadcast::Sender<Bytes>> = if path == snap.mount_path {
+            None
+        } else {
+            state
+                .variants
+                .read()
+                .expect("variants poisoned")
+                .get(path)
+                .cloned()
+        };
         let wants_metadata = header_text.lines().any(|l| {
             l.to_ascii_lowercase().starts_with("icy-metadata:") && l.trim().ends_with('1')
         });
@@ -545,7 +612,10 @@ async fn handle_connection(
             return Ok(());
         }
 
-        let mut rx = state.tx.subscribe();
+        let mut rx = match &variant_tx {
+            Some(tx) => tx.subscribe(),
+            None => state.tx.subscribe(),
+        };
         state.listener_count.fetch_add(1, Ordering::SeqCst);
 
         if wants_metadata {
@@ -658,6 +728,9 @@ struct AdminDashboardPage {
     content_type: String,
     stream_name: String,
     relay_url: String,
+    station_bitrate_kbps: u32,
+    apply_loudness_normalization: bool,
+    crossfade_seconds: u32,
     track_count: usize,
     now_playing_title: Option<String>,
     now_playing_artist: Option<String>,
@@ -690,6 +763,9 @@ async fn admin_get(State(state): State<EngineState>) -> Response {
         content_type: snap.content_type,
         stream_name: snap.stream_name,
         relay_url: snap.relay_url,
+        station_bitrate_kbps: snap.station_bitrate_kbps,
+        apply_loudness_normalization: snap.apply_loudness_normalization,
+        crossfade_seconds: snap.crossfade_seconds,
         track_count,
         now_playing_title: np.as_ref().map(|n| n.title.clone()),
         now_playing_artist: np.as_ref().and_then(|n| {
@@ -712,6 +788,12 @@ struct SettingsForm {
     stream_name: String,
     #[serde(default)]
     relay_url: String,
+    #[serde(default)]
+    station_bitrate_kbps: Option<u32>,
+    #[serde(default)]
+    apply_loudness_normalization: Option<String>,
+    #[serde(default)]
+    crossfade_seconds: Option<u32>,
 }
 
 async fn admin_post(State(state): State<EngineState>, Form(form): Form<SettingsForm>) -> Response {
@@ -721,6 +803,13 @@ async fn admin_post(State(state): State<EngineState>, Form(form): Form<SettingsF
     snap.content_type = form.content_type.trim().to_string();
     snap.stream_name = form.stream_name.trim().to_string();
     snap.relay_url = form.relay_url.trim().to_string();
+    if let Some(b) = form.station_bitrate_kbps {
+        snap.station_bitrate_kbps = b.clamp(32, 320);
+    }
+    snap.apply_loudness_normalization = form.apply_loudness_normalization.is_some();
+    if let Some(x) = form.crossfade_seconds {
+        snap.crossfade_seconds = x.min(10);
+    }
     let _ = state.settings.replace(snap);
     Redirect::to("/admin/radio?saved=1").into_response()
 }
@@ -885,6 +974,119 @@ async fn autodj_loop(state: EngineState) {
             );
             stream_track(&state, &track).await;
         }
+    }
+}
+
+// ============================================================================
+// Multi-mount variants — each runs an ffmpeg transcoder fed from the
+// master broadcast, producing a distinct bitrate / format on its own
+// per-variant broadcast channel. Listeners route by URL path.
+// ============================================================================
+
+fn spawn_variant_transcoders(state: EngineState) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SPAWNED: AtomicBool = AtomicBool::new(false);
+    if SPAWNED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let variants = state.settings.snapshot().variant_mounts.clone();
+    for v in variants {
+        // Allocate the variant's broadcast channel and remember it.
+        let (tx, _) = broadcast::channel::<Bytes>(BROADCAST_CAPACITY);
+        state
+            .variants
+            .write()
+            .expect("variants poisoned")
+            .insert(v.path.clone(), tx.clone());
+        let st = state.clone();
+        let v_clone = v.clone();
+        tokio::spawn(async move {
+            run_variant_transcoder(st, v_clone, tx).await;
+        });
+    }
+}
+
+async fn run_variant_transcoder(
+    state: EngineState,
+    variant: VariantMountSetting,
+    out_tx: broadcast::Sender<Bytes>,
+) {
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt as _;
+    use tokio::process::Command;
+
+    loop {
+        let mut master_rx = state.tx.subscribe();
+        let mut child = match Command::new("ffmpeg")
+            .arg("-hide_banner")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-i")
+            .arg("pipe:0")
+            .arg("-c:a")
+            .arg("libmp3lame")
+            .arg("-b:a")
+            .arg(format!("{}k", variant.bitrate_kbps))
+            .arg("-f")
+            .arg("mp3")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!(
+                    "[radio-engine] variant {} ffmpeg spawn failed: {} (retry in 5s)",
+                    variant.path, e
+                );
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+        let mut stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => break,
+        };
+        let mut stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => break,
+        };
+
+        // Pump master broadcast → ffmpeg stdin.
+        let stdin_task = tokio::spawn(async move {
+            loop {
+                match master_rx.recv().await {
+                    Ok(chunk) => {
+                        if stdin.write_all(&chunk).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        // Pump ffmpeg stdout → variant broadcast.
+        let mut buf = vec![0u8; 4096];
+        loop {
+            match stdout.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    let _ = out_tx.send(Bytes::copy_from_slice(&buf[..n]));
+                }
+                Err(_) => break,
+            }
+        }
+
+        stdin_task.abort();
+        let _ = child.wait().await;
+        // ffmpeg exited (probably because the master closed). Brief
+        // back-off and respawn.
+        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
 
@@ -1104,32 +1306,110 @@ fn push_history(state: &EngineState, entry: NowPlaying) {
 /// duration is bogus, sleeps `duration_seconds` to keep the schedule
 /// aligned and bails.
 async fn stream_track(state: &EngineState, track: &Track) {
+    if track.duration_seconds == 0 {
+        eprintln!("[autodj] skipping {} (no duration)", track.title);
+        return;
+    }
+
+    // Build the audio filter chain: volume normalization (if enabled +
+    // measurement available) followed by a short fade in at the start
+    // and a fade out at the end. Crossfade is approximated this way:
+    // each track's last `crossfade_seconds` overlaps the NEXT track's
+    // first `crossfade_seconds` of fade-in. With ffmpeg single-track
+    // pipes that's the cleanest we can do without holding two
+    // subprocesses concurrently — true overlap mixing comes in a
+    // follow-up that pipes both decoders into one mixer.
+    let snap = state.settings.snapshot();
+    let mut filters: Vec<String> = Vec::new();
+    if snap.apply_loudness_normalization {
+        if let Some(g) = track.target_gain_db {
+            filters.push(format!("volume={:+.2}dB", g));
+        }
+    }
+    let xf = snap.crossfade_seconds.min(10) as u64;
+    if xf > 0 {
+        filters.push(format!("afade=t=in:st=0:d={}", xf));
+        if track.duration_seconds > xf + 1 {
+            let st = track.duration_seconds - xf;
+            filters.push(format!("afade=t=out:st={}:d={}", st, xf));
+        }
+    }
+    let af_arg = filters.join(",");
+
+    use tokio::process::Command;
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-i")
+        .arg(&track.file_path);
+    if !af_arg.is_empty() {
+        cmd.arg("-af").arg(&af_arg);
+    }
+    cmd.arg("-c:a")
+        .arg("libmp3lame")
+        .arg("-b:a")
+        .arg(format!("{}k", snap.station_bitrate_kbps))
+        .arg("-f")
+        .arg("mp3")
+        .arg("-")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[autodj] ffmpeg spawn failed: {} — falling back", e);
+            return stream_track_raw_pacing(state, track).await;
+        }
+    };
+    let mut stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => return,
+    };
+
+    // Pace the encoded MP3 output at the configured station bitrate.
+    let chunks_per_sec: u64 = 10;
+    let bytes_per_sec = (snap.station_bitrate_kbps as u64 * 1000) / 8;
+    let bytes_per_chunk = (bytes_per_sec / chunks_per_sec).max(2048) as usize;
+    let chunk_period = Duration::from_millis(1000 / chunks_per_sec);
+
+    use tokio::io::AsyncReadExt;
+    let mut buf = vec![0u8; bytes_per_chunk];
+    loop {
+        if state.source_alive.load(Ordering::SeqCst) || state.relay_alive.load(Ordering::SeqCst) {
+            let _ = child.kill().await;
+            break;
+        }
+        let n = match stdout.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        let _ = state.tx.send(Bytes::copy_from_slice(&buf[..n]));
+        tokio::time::sleep(chunk_period).await;
+    }
+    let _ = child.wait().await;
+}
+
+/// Fallback for hosts without ffmpeg: just chunk + pace the raw file
+/// like the original implementation. No gain, no fades, no transcode.
+async fn stream_track_raw_pacing(state: &EngineState, track: &Track) {
     use tokio::fs::File;
     use tokio::io::AsyncReadExt;
 
-    if track.duration_seconds == 0 || track.size_bytes == 0 {
-        eprintln!("[autodj] skipping {} (no duration/size)", track.title);
+    if track.size_bytes == 0 {
         return;
     }
     let mut file = match File::open(&track.file_path).await {
         Ok(f) => f,
-        Err(e) => {
-            eprintln!("[autodj] could not open {}: {}", track.file_path, e);
-            tokio::time::sleep(Duration::from_secs(track.duration_seconds.min(60))).await;
-            return;
-        }
+        Err(_) => return,
     };
-
-    // Aim for ~10 chunks per second. Smaller chunks → smoother pacing,
-    // smaller jitter when listeners join mid-track.
     let chunks_per_sec: u64 = 10;
     let bytes_per_chunk = (track.size_bytes / track.duration_seconds / chunks_per_sec).max(2048);
     let chunk_period = Duration::from_millis(1000 / chunks_per_sec);
-
     let mut buf = vec![0u8; bytes_per_chunk as usize];
     loop {
-        if state.source_alive.load(Ordering::SeqCst) {
-            // Live source took over mid-track — abandon.
+        if state.source_alive.load(Ordering::SeqCst) || state.relay_alive.load(Ordering::SeqCst) {
             break;
         }
         let n = match file.read(&mut buf).await {

@@ -29,7 +29,7 @@
 {% else %}
 <table class="cms-table">
   <thead>
-    <tr><th>Title</th><th>Artist</th><th>Duration</th><th>Size</th><th>Added</th><th></th></tr>
+    <tr><th>Title</th><th>Artist</th><th>Duration</th><th>Size</th><th>Gain</th><th>Added</th><th></th></tr>
   </thead>
   <tbody>
     {% for t in tracks %}
@@ -38,6 +38,7 @@
       <td>{{ t.artist }}</td>
       <td>{{ t.duration_human }}</td>
       <td>{{ t.size_human }}</td>
+      <td>{{ t.gain_human }}</td>
       <td>{{ t.added_human }}</td>
       <td>
         <form method="post" action="/admin/radio/tracks/{{ t.id }}/delete"
