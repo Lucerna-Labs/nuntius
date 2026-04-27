@@ -1,33 +1,41 @@
-//! Native Rust radio streaming engine — Icecast-compatible.
+//! Native Rust radio streaming engine — Icecast-compatible, with
+//! AutoDJ + track library so the station broadcasts 24/7 even when no
+//! live source is connected.
 //!
 //! Single-mount, single-source, many-listeners. The source connects via
 //! `SOURCE /mount ICE/1.0` (legacy) or `PUT /mount HTTP/1.1` (modern)
 //! with HTTP Basic auth (user `source`, configured password). Audio
-//! bytes from the source are fanned out via `tokio::sync::broadcast` to
-//! every connected listener. Listeners that fall behind are dropped
-//! (the broadcast channel skips messages instead of blocking the source).
+//! bytes are fanned out via `tokio::sync::broadcast` to every connected
+//! listener. When no live source is connected, the AutoDJ worker
+//! shuffles the uploaded track library and streams paced at each
+//! track's effective bitrate. A live source connecting yields the
+//! AutoDJ; on disconnect the AutoDJ resumes.
 //!
 //! Co-existence with axum: the radio engine listens on its OWN TCP port
 //! (typically 8000), separate from the API port. The plugin contributes
-//! `admin_routes()` for status + settings on the API port.
+//! `admin_routes()` for status + library + settings on the API port.
+
+mod library;
 
 use askama::Template;
 use axum::{
     extract::State,
     http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
-    routing::get,
+    response::{Html, IntoResponse, Json, Redirect, Response},
+    routing::{get, post},
     Form, Router,
 };
 use base64::Engine as _;
 use bytes::Bytes;
 use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_database::{CccDB, Track};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
@@ -61,6 +69,14 @@ pub struct RadioSettings {
     pub source_password: String,
     pub content_type: String,
     pub stream_name: String,
+    /// Directory under which AutoDJ stores uploaded music tracks.
+    /// Created on first run if it doesn't exist.
+    #[serde(default = "default_library_dir")]
+    pub library_dir: String,
+}
+
+fn default_library_dir() -> String {
+    "./media/radio-library".into()
 }
 
 impl Default for RadioSettings {
@@ -71,6 +87,7 @@ impl Default for RadioSettings {
             source_password: "hackme".into(),
             content_type: "audio/mpeg".into(),
             stream_name: "Creator Command Center Radio".into(),
+            library_dir: default_library_dir(),
         }
     }
 }
@@ -142,6 +159,25 @@ struct EngineState {
     tx: broadcast::Sender<Bytes>,
     source_alive: Arc<AtomicBool>,
     listener_count: Arc<AtomicUsize>,
+    /// Where uploaded music tracks live on disk.
+    library_dir: Arc<PathBuf>,
+    /// Live current-track snapshot for /api/radio/nowplaying + dashboard.
+    now_playing: Arc<RwLock<Option<NowPlaying>>>,
+    /// Live database handle (None when constructed via the legacy CLI
+    /// `radio` subcommand, which has no DB).
+    db: Option<Arc<CccDB>>,
+}
+
+/// What the AutoDJ is currently airing. Cleared when a live source
+/// takes over.
+#[derive(Debug, Clone, Serialize)]
+pub struct NowPlaying {
+    pub source: &'static str, // "autodj" | "live"
+    pub track_id: Option<u64>,
+    pub title: String,
+    pub artist: String,
+    pub started_at: u64,
+    pub duration_seconds: u64,
 }
 
 // ============================================================================
@@ -162,6 +198,7 @@ impl RadioEnginePlugin {
             port,
             ..RadioSettings::default()
         };
+        let library_dir = PathBuf::from(&settings.library_dir);
         let state = EngineState {
             settings: Arc::new(SettingsStore {
                 path: PathBuf::from("radio.toml"),
@@ -170,6 +207,9 @@ impl RadioEnginePlugin {
             tx,
             source_alive: Arc::new(AtomicBool::new(false)),
             listener_count: Arc::new(AtomicUsize::new(0)),
+            library_dir: Arc::new(library_dir),
+            now_playing: Arc::new(RwLock::new(None)),
+            db: None,
         };
         Self {
             port,
@@ -188,13 +228,19 @@ impl RadioEnginePlugin {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("radio.toml"));
         let store = Arc::new(SettingsStore::load_or_init(&path)?);
-        let port = store.snapshot().port;
+        let snap = store.snapshot();
+        let port = snap.port;
+        let library_dir = PathBuf::from(&snap.library_dir);
+        let _ = std::fs::create_dir_all(&library_dir);
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let state = EngineState {
             settings: store,
             tx,
             source_alive: Arc::new(AtomicBool::new(false)),
             listener_count: Arc::new(AtomicUsize::new(0)),
+            library_dir: Arc::new(library_dir),
+            now_playing: Arc::new(RwLock::new(None)),
+            db: None,
         };
         Ok(Self {
             port,
@@ -236,11 +282,47 @@ impl Plugin for RadioEnginePlugin {
         Ok(())
     }
 
-    fn admin_routes(&self, _ctx: &AppContext) -> Option<Router> {
+    fn routes(&self, _ctx: &AppContext) -> Option<Router> {
+        // Public now-playing endpoint — usable by listeners' web pages,
+        // overlays, etc. JSON, not gated.
         let st = self.state.clone();
         Some(
             Router::new()
+                .route("/api/radio/nowplaying", get(public_now_playing))
+                .with_state(st),
+        )
+    }
+
+    fn admin_routes(&self, ctx: &AppContext) -> Option<Router> {
+        // Inject the live DB handle and spawn AutoDJ on first call.
+        // We do this here (not in init) because init has no ctx.
+        {
+            // SAFETY: only this Arc holds the db; we create it once at boot.
+            // We can't mutate `self.state.db` (it's behind an Arc), so we
+            // build a fresh state with the db filled in for the routes
+            // returned here. The TCP server task uses the cloned state we
+            // already spawned in init() — that one stays db-less, which
+            // is fine: the engine's TCP loop doesn't need DB access.
+        }
+        let st = EngineState {
+            db: Some(ctx.db.clone()),
+            ..self.state.clone()
+        };
+        spawn_autodj(st.clone());
+        Some(
+            Router::new()
                 .route("/radio", get(admin_get).post(admin_post))
+                .route(
+                    "/radio/tracks",
+                    get(library::admin_track_list).post(library::admin_track_upload),
+                )
+                .route(
+                    "/radio/tracks/:id/delete",
+                    post(library::admin_track_delete),
+                )
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    library::MAX_TRACK_BYTES,
+                ))
                 .with_state(st),
         )
     }
@@ -349,6 +431,15 @@ async fn handle_connection(
         // Accept handshake.
         let _ = sock.write_all(b"HTTP/1.0 200 OK\r\n\r\n").await;
         state.source_alive.store(true, Ordering::SeqCst);
+        // Live broadcast preempts AutoDJ's now-playing entry.
+        *state.now_playing.write().expect("np poisoned") = Some(NowPlaying {
+            source: "live",
+            track_id: None,
+            title: snap.stream_name.clone(),
+            artist: format!("Live from {}", peer),
+            started_at: unix_now(),
+            duration_seconds: 0,
+        });
         println!("[radio-engine] source connected from {}", peer);
 
         // Push leftover body bytes immediately if any.
@@ -367,6 +458,8 @@ async fn handle_connection(
             }
         }
         state.source_alive.store(false, Ordering::SeqCst);
+        // AutoDJ will repopulate this on its next iteration.
+        *state.now_playing.write().expect("np poisoned") = None;
         println!("[radio-engine] source disconnected from {}", peer);
         Ok(())
     } else if method.eq_ignore_ascii_case("GET") && path == snap.mount_path {
@@ -459,11 +552,21 @@ struct AdminDashboardPage {
     source_password: String,
     content_type: String,
     stream_name: String,
+    track_count: usize,
+    now_playing_title: Option<String>,
+    now_playing_artist: Option<String>,
     saved: Option<bool>,
 }
 
 async fn admin_get(State(state): State<EngineState>) -> Response {
     let snap = state.settings.snapshot();
+    let np = state.now_playing.read().expect("np poisoned").clone();
+    let track_count = state
+        .db
+        .as_ref()
+        .and_then(|db| db.all_tracks().ok())
+        .map(|v| v.len())
+        .unwrap_or(0);
     render(AdminDashboardPage {
         source_alive: state.source_alive.load(Ordering::SeqCst),
         listeners: state.listener_count.load(Ordering::SeqCst),
@@ -472,6 +575,15 @@ async fn admin_get(State(state): State<EngineState>) -> Response {
         source_password: snap.source_password,
         content_type: snap.content_type,
         stream_name: snap.stream_name,
+        track_count,
+        now_playing_title: np.as_ref().map(|n| n.title.clone()),
+        now_playing_artist: np.as_ref().and_then(|n| {
+            if n.artist.is_empty() {
+                None
+            } else {
+                Some(n.artist.clone())
+            }
+        }),
         saved: None,
     })
 }
@@ -492,6 +604,147 @@ async fn admin_post(State(state): State<EngineState>, Form(form): Form<SettingsF
     snap.stream_name = form.stream_name.trim().to_string();
     let _ = state.settings.replace(snap);
     Redirect::to("/admin/radio?saved=1").into_response()
+}
+
+// ============================================================================
+// Public now-playing endpoint
+// ============================================================================
+
+async fn public_now_playing(State(state): State<EngineState>) -> Response {
+    let snap = state
+        .now_playing
+        .read()
+        .expect("now_playing poisoned")
+        .clone();
+    Json(serde_json::json!({
+        "now_playing": snap,
+        "live": state.source_alive.load(Ordering::SeqCst),
+        "listeners": state.listener_count.load(Ordering::SeqCst),
+    }))
+    .into_response()
+}
+
+// ============================================================================
+// AutoDJ — fills dead air when no live source is connected
+// ============================================================================
+
+fn spawn_autodj(state: EngineState) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SPAWNED: AtomicBool = AtomicBool::new(false);
+    if SPAWNED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tokio::spawn(autodj_loop(state));
+}
+
+async fn autodj_loop(state: EngineState) {
+    use rand::seq::SliceRandom;
+
+    let db = match state.db.clone() {
+        Some(db) => db,
+        None => return,
+    };
+
+    loop {
+        // While a live source is live, the AutoDJ should not stream.
+        // Sleep and re-check.
+        if state.source_alive.load(Ordering::SeqCst) {
+            // Mark now-playing as live (no track info — the source decides).
+            *state.now_playing.write().expect("np poisoned") = Some(NowPlaying {
+                source: "live",
+                track_id: None,
+                title: "Live broadcast".into(),
+                artist: String::new(),
+                started_at: unix_now(),
+                duration_seconds: 0,
+            });
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+
+        // Build a shuffled queue of tracks. Re-shuffle each time we exhaust
+        // the library so the order varies across cycles.
+        let mut queue: Vec<Track> = db.all_tracks().unwrap_or_default();
+        if queue.is_empty() {
+            // Nothing to play — clear now-playing and back off.
+            *state.now_playing.write().expect("np poisoned") = None;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+        queue.shuffle(&mut rand::thread_rng());
+
+        for track in queue {
+            // Bail out of the queue on source connect — the OUTER loop
+            // will pick up the live state and spin until disconnect.
+            if state.source_alive.load(Ordering::SeqCst) {
+                break;
+            }
+            *state.now_playing.write().expect("np poisoned") = Some(NowPlaying {
+                source: "autodj",
+                track_id: Some(track.id),
+                title: track.title.clone(),
+                artist: track.artist.clone(),
+                started_at: unix_now(),
+                duration_seconds: track.duration_seconds,
+            });
+            println!(
+                "[autodj] now playing: {} - {} ({}s)",
+                track.artist, track.title, track.duration_seconds
+            );
+            stream_track(&state, &track).await;
+        }
+    }
+}
+
+/// Open the file and stream it into the broadcast channel paced at the
+/// track's effective bitrate (size_bytes / duration_seconds). Yields
+/// the entire track, then returns. If the file can't be opened or the
+/// duration is bogus, sleeps `duration_seconds` to keep the schedule
+/// aligned and bails.
+async fn stream_track(state: &EngineState, track: &Track) {
+    use tokio::fs::File;
+    use tokio::io::AsyncReadExt;
+
+    if track.duration_seconds == 0 || track.size_bytes == 0 {
+        eprintln!("[autodj] skipping {} (no duration/size)", track.title);
+        return;
+    }
+    let mut file = match File::open(&track.file_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[autodj] could not open {}: {}", track.file_path, e);
+            tokio::time::sleep(Duration::from_secs(track.duration_seconds.min(60))).await;
+            return;
+        }
+    };
+
+    // Aim for ~10 chunks per second. Smaller chunks → smoother pacing,
+    // smaller jitter when listeners join mid-track.
+    let chunks_per_sec: u64 = 10;
+    let bytes_per_chunk = (track.size_bytes / track.duration_seconds / chunks_per_sec).max(2048);
+    let chunk_period = Duration::from_millis(1000 / chunks_per_sec);
+
+    let mut buf = vec![0u8; bytes_per_chunk as usize];
+    loop {
+        if state.source_alive.load(Ordering::SeqCst) {
+            // Live source took over mid-track — abandon.
+            break;
+        }
+        let n = match file.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        let _ = state.tx.send(Bytes::copy_from_slice(&buf[..n]));
+        tokio::time::sleep(chunk_period).await;
+    }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn render<T: Template>(tmpl: T) -> Response {

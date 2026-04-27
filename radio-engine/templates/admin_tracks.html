@@ -1,0 +1,66 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Track Library — Radio — Creator Command Center{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Track library</h1>
+  <p class="cms-page__lede">{{ tracks.len() }} track(s). Total: {{ total_human }}.</p>
+</header>
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+<form method="post" action="/admin/radio/tracks" enctype="multipart/form-data" class="cms-form" style="max-width:640px; margin-bottom: 24px;">
+  <h2 style="margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);">Add a track</h2>
+  <label class="cms-field">
+    <span class="cms-field__label">Audio file</span>
+    <input class="cms-field__input" type="file" name="audio" required accept="audio/*">
+    <span class="cms-field__hint">MP3, M4A, FLAC, OGG. Up to {{ max_mb }} MB. Title/artist auto-detected when ID3 tags are present.</span>
+  </label>
+  <button class="cms-btn cms-btn--primary" type="submit">Upload</button>
+</form>
+
+{% if tracks.is_empty() %}
+  <p>No tracks yet. Upload some music — the AutoDJ will start broadcasting them on the listener stream.</p>
+{% else %}
+<table class="cms-table">
+  <thead>
+    <tr><th>Title</th><th>Artist</th><th>Duration</th><th>Size</th><th>Added</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for t in tracks %}
+    <tr>
+      <td>{{ t.title }}</td>
+      <td>{{ t.artist }}</td>
+      <td>{{ t.duration_human }}</td>
+      <td>{{ t.size_human }}</td>
+      <td>{{ t.added_human }}</td>
+      <td>
+        <form method="post" action="/admin/radio/tracks/{{ t.id }}/delete"
+              onsubmit="return confirm('Delete this track from the library?')" style="display:inline">
+          <button class="cms-btn cms-btn--danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>How AutoDJ works</h3>
+  <p>When no live source is connected, the engine shuffles your library
+  and streams tracks at their natural bitrate. A live source connecting
+  immediately preempts AutoDJ; on disconnect, AutoDJ resumes.</p>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Now playing</h3>
+  <p style="font-family:monospace;">curl /api/radio/nowplaying</p>
+</div>
+{% endblock %}

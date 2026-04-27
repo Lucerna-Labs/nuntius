@@ -198,12 +198,25 @@ pub struct Subscriber {
     pub created_at: u64,
 }
 
-/// Example struct for a Radio Track
+/// A music track in the radio station's library.
+///
+/// `file_path` points at the on-disk audio file the AutoDJ streams.
+/// `duration_seconds` and `size_bytes` together let the streaming
+/// pacer compute the effective bitrate and chunk the file at real time.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Track {
     pub id: u64,
     pub title: String,
     pub artist: String,
+    #[serde(default)]
+    pub album: String,
+    #[serde(default)]
+    pub genre: String,
+    pub file_path: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub duration_seconds: u64,
+    pub created_at: u64,
 }
 
 /// Publication state of a podcast episode.
@@ -707,29 +720,45 @@ impl CccDB {
 
     // --- TRACKS ---
 
-    /// Insert a track into the database.
-    pub fn insert_track(&self, track: &Track) -> Result<(), Error> {
+    pub fn upsert_track(&self, track: &Track) -> Result<(), Error> {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(TRACKS_TABLE)?;
-            let encoded: Vec<u8> = bincode::serialize(track).unwrap();
-            table.insert(track.id, encoded.as_slice())?;
+            let bytes = bincode::serialize(track).unwrap();
+            table.insert(track.id, bytes.as_slice())?;
         }
         write_txn.commit()?;
         Ok(())
     }
 
-    /// Get a track by its ID.
     pub fn get_track(&self, id: u64) -> Result<Option<Track>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(TRACKS_TABLE)?;
+        Ok(table
+            .get(id)?
+            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+    }
 
-        if let Some(encoded) = table.get(id)? {
-            let track: Track = bincode::deserialize(encoded.value()).unwrap();
-            Ok(Some(track))
-        } else {
-            Ok(None)
+    pub fn delete_track(&self, id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(TRACKS_TABLE)?;
+            table.remove(id)?;
         }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn all_tracks(&self) -> Result<Vec<Track>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(TRACKS_TABLE)?;
+        let mut out: Vec<Track> = table
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
+            .collect();
+        out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(out)
     }
 
     // --- TRANSCRIPTION JOBS ---

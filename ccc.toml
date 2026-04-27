@@ -21,7 +21,15 @@ enabled = [
     "blog",
     "podcast",
     "video-podcast",
+    "radio-engine",
     "activitypub",
+    "whisper",
+    "s3",
+    "newsletter",
+    "seo",
+    "analytics",
+    "patreon",
+    "ads",
 ]
 
 # Per-plugin configuration goes under [plugin.<name>]. Plugins read the

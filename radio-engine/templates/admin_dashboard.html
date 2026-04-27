@@ -17,20 +17,33 @@
 <section class="cms-grid" style="margin-bottom: 24px;">
   <div class="cms-tile" style="cursor: default;">
     <span class="cms-tile__label">Source</span>
-    <span style="font-size: 22px; font-weight: 700;">{% if source_alive %}Connected{% else %}Idle{% endif %}</span>
+    <span style="font-size: 22px; font-weight: 700;">{% if source_alive %}Live{% else %}AutoDJ / Idle{% endif %}</span>
   </div>
   <div class="cms-tile" style="cursor: default;">
     <span class="cms-tile__label">Listeners</span>
     <span style="font-size: 28px; font-weight: 700;">{{ listeners }}</span>
   </div>
   <div class="cms-tile" style="cursor: default;">
+    <span class="cms-tile__label">Library</span>
+    <span style="font-size: 28px; font-weight: 700;">{{ track_count }}</span>
+  </div>
+  <div class="cms-tile" style="cursor: default;">
     <span class="cms-tile__label">Port</span>
     <span style="font-size: 28px; font-weight: 700;">{{ port }}</span>
   </div>
-  <div class="cms-tile" style="cursor: default;">
-    <span class="cms-tile__label">Mount</span>
-    <span style="font-size: 18px; font-weight: 700; word-break: break-all;">{{ mount_path }}</span>
-  </div>
+</section>
+
+<section class="cms-section" style="margin-bottom: 24px;">
+  <h2>Now playing</h2>
+  {% match now_playing_title %}
+    {% when Some with (title) %}
+      <p style="font-size:18px;">
+        <strong>{{ title }}</strong>
+        {% match now_playing_artist %}{% when Some with (a) %}<br><span style="color: var(--text-dim);">{{ a }}</span>{% when None %}{% endmatch %}
+      </p>
+    {% when None %}
+      <p style="color: var(--text-dim);">Nothing playing. Upload tracks at <a href="/admin/radio/tracks">Track library</a> to start AutoDJ.</p>
+  {% endmatch %}
 </section>
 
 <form method="post" action="/admin/radio" class="cms-form" style="max-width:640px">
