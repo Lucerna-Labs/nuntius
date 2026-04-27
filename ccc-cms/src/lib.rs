@@ -13,7 +13,7 @@
 //! routes from other plugins do not mount. See the `Plugin::admin_routes`
 //! security invariant in `ccc-core`.
 
-use ccc_core::{Plugin, PluginError};
+use ccc_core::{AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use std::any::Any;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -73,11 +73,36 @@ impl CmsPlugin {
 
 impl Plugin for CmsPlugin {
     fn name(&self) -> &'static str {
-        "Content Management System"
+        "Content"
     }
 
     fn version(&self) -> &'static str {
         "0.1.0"
+    }
+
+    fn id(&self) -> String {
+        "cms".into()
+    }
+    fn kind(&self) -> &'static str {
+        "CMS"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-cms"
+    }
+
+    fn status(&self, _ctx: &AppContext) -> PluginStatus {
+        PluginStatus {
+            state: if self.store.is_initialized() {
+                PluginLifecycle::Configured
+            } else {
+                PluginLifecycle::Unconfigured
+            },
+            badge: None,
+            detail: serde_json::json!({
+                "configured": self.store.is_initialized(),
+                "counts": { "pages": 0, "drafts": 0, "scheduled": 0, "comments_pending": 0 },
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {

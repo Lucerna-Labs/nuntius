@@ -23,7 +23,10 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError, ServiceRegistry};
+use ccc_core::{
+    AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError, PluginLifecycle, PluginStatus,
+    ServiceRegistry,
+};
 use ccc_database::{CccDB, EpisodeStatus, PodcastEpisode, TranscriptionJob, TranscriptionStatus};
 use rss::{
     extension::itunes::{ITunesChannelExtensionBuilder, ITunesItemExtensionBuilder},
@@ -91,11 +94,49 @@ struct AppState {
 
 impl Plugin for PodcastPlugin {
     fn name(&self) -> &'static str {
-        "Podcast Publisher"
+        "Podcast"
     }
 
     fn version(&self) -> &'static str {
         "0.3.0"
+    }
+
+    fn id(&self) -> String {
+        "podcast".into()
+    }
+    fn kind(&self) -> &'static str {
+        "AUDIO"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-podcast"
+    }
+
+    fn status(&self, ctx: &AppContext) -> PluginStatus {
+        let episodes = ctx.db.all_podcast_episodes().unwrap_or_default();
+        let rows: Vec<_> = episodes
+            .iter()
+            .rev()
+            .take(10)
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id,
+                    "title": e.title,
+                    "status": if e.published_at.is_some() { "published" } else { "producing" },
+                    "duration": format_seconds(e.duration_seconds),
+                    "downloads": 0u64,
+                })
+            })
+            .collect();
+        PluginStatus {
+            state: PluginLifecycle::Configured,
+            badge: None,
+            detail: serde_json::json!({
+                "configured": true,
+                "audio_dir": self.audio_dir.to_string_lossy(),
+                "members_token_set": self.members_token != "change-me",
+                "episodes": rows,
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
@@ -789,4 +830,15 @@ fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
 
 fn is_leap(y: u32) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
+}
+
+fn format_seconds(s: u64) -> String {
+    let h = s / 3600;
+    let m = (s % 3600) / 60;
+    let sec = s % 60;
+    if h > 0 {
+        format!("{:02}:{:02}:{:02}", h, m, sec)
+    } else {
+        format!("{:02}:{:02}", m, sec)
+    }
 }

@@ -3,6 +3,8 @@
 {% block title %}{{ name }} — Playlist — Creator Command Center{% endblock %}
 
 {% block content %}
+{% include "_radio_tabs.html" %}
+
 <header class="cms-page__header">
   <h1>{{ name }}</h1>
   <p class="cms-page__lede">{{ tracks.len() }} track(s).</p>

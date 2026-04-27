@@ -22,6 +22,7 @@ pub const MAX_TRACK_BYTES: usize = 200 * 1024 * 1024; // 200 MB
 #[derive(Template)]
 #[template(path = "admin_tracks.html")]
 struct TracksPage<'a> {
+    active_tab: &'static str,
     tracks: Vec<TrackRow>,
     total_human: String,
     error: Option<&'a str>,
@@ -219,6 +220,7 @@ fn render_list(state: &EngineState, error: Option<&str>) -> Response {
         })
         .collect();
     let page = TracksPage {
+        active_tab: "library",
         tracks: rows,
         total_human: human_bytes(total),
         error,

@@ -23,7 +23,10 @@ use axum::{
     routing::get,
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, MembershipService, Plugin, PluginError};
+use ccc_core::{
+    AdminNavEntry, AppContext, MembershipService, Plugin, PluginError, PluginLifecycle,
+    PluginStatus,
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -239,7 +242,7 @@ impl MembershipService for PatreonMembership {
 }
 
 #[derive(Clone)]
-struct PluginState {
+struct RouteState {
     settings: Arc<SettingsStore>,
 }
 
@@ -250,6 +253,49 @@ impl Plugin for CccPluginPatreonPlugin {
 
     fn version(&self) -> &'static str {
         "0.2.0"
+    }
+
+    fn id(&self) -> String {
+        "patreon".into()
+    }
+    fn kind(&self) -> &'static str {
+        "MEMBERSHIP"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-heart"
+    }
+
+    fn status(&self, _ctx: &AppContext) -> PluginStatus {
+        let snap = self.settings.snapshot();
+        let mut missing: Vec<&'static str> = Vec::new();
+        if snap.client_id.is_empty() {
+            missing.push("client_id");
+        }
+        if snap.client_secret.is_empty() {
+            missing.push("client_secret");
+        }
+        if snap.redirect_uri.is_empty() {
+            missing.push("redirect_uri");
+        }
+        if snap.required_tier_id.is_empty() {
+            missing.push("required_tier_id");
+        }
+        let configured = missing.is_empty();
+        PluginStatus {
+            state: if configured {
+                PluginLifecycle::Configured
+            } else {
+                PluginLifecycle::Unconfigured
+            },
+            badge: None,
+            detail: serde_json::json!({
+                "configured": configured,
+                "missing": missing,
+                "file": "patreon.toml",
+                "cookie_key_set": !snap.cookie_key_hex.is_empty(),
+                "members": 0u64,
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
@@ -265,7 +311,7 @@ impl Plugin for CccPluginPatreonPlugin {
             settings: self.settings.clone(),
         }));
 
-        let state = PluginState {
+        let state = RouteState {
             settings: self.settings.clone(),
         };
         Some(
@@ -283,7 +329,7 @@ impl Plugin for CccPluginPatreonPlugin {
         Some(
             Router::new()
                 .route("/patreon", get(admin_get).post(admin_post))
-                .with_state(PluginState {
+                .with_state(RouteState {
                     settings: self.settings.clone(),
                 }),
         )
@@ -315,7 +361,7 @@ struct PublicStatusPage<'a> {
     error: Option<&'a str>,
 }
 
-async fn public_status(State(state): State<PluginState>, cookies: Cookies) -> Response {
+async fn public_status(State(state): State<RouteState>, cookies: Cookies) -> Response {
     let key = Key::from(&state.settings.cookie_key);
     let signed = cookies.signed(&key);
     let patron = signed
@@ -329,7 +375,7 @@ async fn public_status(State(state): State<PluginState>, cookies: Cookies) -> Re
     })
 }
 
-async fn public_login(State(state): State<PluginState>) -> Response {
+async fn public_login(State(state): State<RouteState>) -> Response {
     let s = state.settings.snapshot();
     if s.client_id.is_empty() || s.redirect_uri.is_empty() {
         return render(PublicStatusPage {
@@ -354,7 +400,7 @@ struct CallbackQuery {
 }
 
 async fn public_callback(
-    State(state): State<PluginState>,
+    State(state): State<RouteState>,
     cookies: Cookies,
     Query(q): Query<CallbackQuery>,
 ) -> Response {
@@ -501,7 +547,7 @@ fn error_page(msg: &str) -> Response {
     })
 }
 
-async fn public_logout(State(state): State<PluginState>, cookies: Cookies) -> Response {
+async fn public_logout(State(state): State<RouteState>, cookies: Cookies) -> Response {
     let key = Key::from(&state.settings.cookie_key);
     let signed = cookies.signed(&key);
     signed.remove(Cookie::new(SESSION_COOKIE, ""));
@@ -524,7 +570,7 @@ struct AdminSettingsPage {
 }
 
 async fn admin_get(
-    State(state): State<PluginState>,
+    State(state): State<RouteState>,
     Query(_): Query<HashMap<String, String>>,
 ) -> Response {
     let s = state.settings.snapshot();
@@ -547,7 +593,7 @@ struct SettingsForm {
     required_tier_id: String,
 }
 
-async fn admin_post(State(state): State<PluginState>, Form(form): Form<SettingsForm>) -> Response {
+async fn admin_post(State(state): State<RouteState>, Form(form): Form<SettingsForm>) -> Response {
     let new = PatreonSettings {
         client_id: form.client_id.trim().to_string(),
         client_secret: form.client_secret.trim().to_string(),

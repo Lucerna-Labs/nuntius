@@ -13,7 +13,7 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use ccc_database::{Ad, CccDB};
 use rand::seq::SliceRandom;
 use serde::Deserialize;
@@ -36,6 +36,31 @@ impl Plugin for CccPluginAdsPlugin {
 
     fn version(&self) -> &'static str {
         "0.2.0"
+    }
+
+    fn id(&self) -> String {
+        "ads".into()
+    }
+    fn kind(&self) -> &'static str {
+        "MONETIZE"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-megaphone"
+    }
+
+    fn status(&self, ctx: &AppContext) -> PluginStatus {
+        let placements = ctx.db.all_ads().map(|v| v.len()).unwrap_or(0);
+        PluginStatus {
+            state: PluginLifecycle::Configured,
+            badge: None,
+            detail: serde_json::json!({
+                "configured": true,
+                "placements": placements,
+                "fill_rate": "—",
+                "revenue_today": "$0.00",
+                "revenue_month": "$0.00",
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {

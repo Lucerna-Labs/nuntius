@@ -18,6 +18,7 @@ use crate::EngineState;
 #[derive(Template)]
 #[template(path = "admin_playlists.html")]
 struct ListPage<'a> {
+    active_tab: &'static str,
     playlists: Vec<PlaylistRow>,
     status: Option<&'a str>,
 }
@@ -67,6 +68,7 @@ pub async fn admin_create(
 #[derive(Template)]
 #[template(path = "admin_playlist_edit.html")]
 struct EditPage<'a> {
+    active_tab: &'static str,
     id: u64,
     name: String,
     kind_str: &'static str,
@@ -293,6 +295,7 @@ fn render_list(state: &EngineState, status: Option<&str>) -> Response {
         })
         .collect();
     let page = ListPage {
+        active_tab: "playlists",
         playlists: rows,
         status,
     };
@@ -330,6 +333,7 @@ fn render_edit(db: &Arc<CccDB>, p: &Playlist, error: Option<&str>) -> Response {
         ),
     };
     let page = EditPage {
+        active_tab: "playlists",
         id: p.id,
         name: p.name.clone(),
         kind_str: p.kind.as_str(),

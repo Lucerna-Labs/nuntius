@@ -29,7 +29,7 @@ use axum::{
 };
 use base64::Engine as _;
 use bytes::Bytes;
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use ccc_database::{CccDB, Track};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -348,11 +348,73 @@ impl RadioEnginePlugin {
 
 impl Plugin for RadioEnginePlugin {
     fn name(&self) -> &'static str {
-        "Native Radio Engine"
+        "Radio Station"
     }
 
     fn version(&self) -> &'static str {
         "0.2.0"
+    }
+
+    fn id(&self) -> String {
+        "radio".into()
+    }
+    fn kind(&self) -> &'static str {
+        "BROADCAST"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-radio"
+    }
+    fn primary(&self) -> bool {
+        true
+    }
+
+    fn status(&self, _ctx: &AppContext) -> PluginStatus {
+        let snap = self.state.settings.snapshot();
+        let live = self.state.source_alive.load(Ordering::SeqCst);
+        let relay = self.state.relay_alive.load(Ordering::SeqCst);
+        let np = self.state.now_playing.read().ok().and_then(|g| g.clone());
+        let listeners = self.state.listener_count.load(Ordering::SeqCst);
+        let track_count = self
+            .state
+            .db
+            .as_ref()
+            .and_then(|db| db.all_tracks().ok())
+            .map(|v| v.len())
+            .unwrap_or(0);
+
+        let state = if live || relay || np.is_some() {
+            PluginLifecycle::Live
+        } else {
+            PluginLifecycle::Configured
+        };
+
+        PluginStatus {
+            state,
+            badge: if listeners > 0 {
+                Some(listeners.to_string())
+            } else {
+                None
+            },
+            detail: serde_json::json!({
+                "configured": true,
+                "live": live,
+                "relay": relay,
+                "config": {
+                    "port": snap.port,
+                    "mount_path": snap.mount_path,
+                    "stream_name": snap.stream_name,
+                    "bitrate": snap.station_bitrate_kbps,
+                    "crossfade": snap.crossfade_seconds,
+                    "normalization": snap.apply_loudness_normalization,
+                    "library_dir": snap.library_dir,
+                    "relay_url": snap.relay_url,
+                },
+                "health": {
+                    "listeners": listeners,
+                    "tracks": track_count,
+                }
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
@@ -372,13 +434,17 @@ impl Plugin for RadioEnginePlugin {
         Ok(())
     }
 
-    fn routes(&self, _ctx: &AppContext) -> Option<Router> {
-        // Public surface: live listener page + nowplaying JSON.
-        let st = self.state.clone();
+    fn routes(&self, ctx: &AppContext) -> Option<Router> {
+        // Public surface: live listener page + nowplaying JSON + library JSON.
+        let st = EngineState {
+            db: Some(ctx.db.clone()),
+            ..self.state.clone()
+        };
         Some(
             Router::new()
                 .route("/radio", get(public_listen))
                 .route("/api/radio/nowplaying", get(public_now_playing))
+                .route("/api/radio/library", get(public_library))
                 .with_state(st),
         )
     }
@@ -405,6 +471,7 @@ impl Plugin for RadioEnginePlugin {
         Some(
             Router::new()
                 .route("/radio", get(admin_get).post(admin_post))
+                .route("/radio/engineering", get(admin_engineering_get))
                 .route(
                     "/radio/tracks",
                     get(library::admin_track_list).post(library::admin_track_upload),
@@ -602,7 +669,8 @@ async fn handle_connection(
              Content-Type: {}\r\n\
              icy-name: {}\r\n\
              Cache-Control: no-cache\r\n\
-             Connection: close\r\n",
+             Connection: close\r\n\
+             Access-Control-Allow-Origin: *\r\n",
             snap.content_type, snap.stream_name
         );
         if wants_metadata {
@@ -720,28 +788,15 @@ fn auth_ok(headers: &str, expected_password: &str) -> bool {
 #[derive(Template)]
 #[template(path = "admin_dashboard.html")]
 struct AdminDashboardPage {
-    source_alive: bool,
-    relay_alive: bool,
-    listeners: usize,
+    active_tab: &'static str,
     port: u16,
     mount_path: String,
-    source_password: String,
-    content_type: String,
-    stream_name: String,
-    relay_url: String,
-    station_bitrate_kbps: u32,
-    apply_loudness_normalization: bool,
-    crossfade_seconds: u32,
     track_count: usize,
-    now_playing_title: Option<String>,
-    now_playing_artist: Option<String>,
     recording_path: Option<String>,
-    saved: Option<bool>,
 }
 
 async fn admin_get(State(state): State<EngineState>) -> Response {
     let snap = state.settings.snapshot();
-    let np = state.now_playing.read().expect("np poisoned").clone();
     let track_count = state
         .db
         .as_ref()
@@ -755,9 +810,43 @@ async fn admin_get(State(state): State<EngineState>) -> Response {
         .as_ref()
         .map(|h| h.path.clone());
     render(AdminDashboardPage {
-        source_alive: state.source_alive.load(Ordering::SeqCst),
-        relay_alive: state.relay_alive.load(Ordering::SeqCst),
-        listeners: state.listener_count.load(Ordering::SeqCst),
+        active_tab: "studio",
+        port: snap.port,
+        mount_path: snap.mount_path,
+        track_count,
+        recording_path,
+    })
+}
+
+#[derive(Template)]
+#[template(path = "admin_engineering.html")]
+struct AdminEngineeringPage {
+    active_tab: &'static str,
+    port: u16,
+    mount_path: String,
+    source_password: String,
+    content_type: String,
+    stream_name: String,
+    relay_url: String,
+    station_bitrate_kbps: u32,
+    apply_loudness_normalization: bool,
+    crossfade_seconds: u32,
+    saved: bool,
+}
+
+#[derive(Deserialize)]
+struct SavedQuery {
+    #[serde(default)]
+    saved: Option<u8>,
+}
+
+async fn admin_engineering_get(
+    State(state): State<EngineState>,
+    axum::extract::Query(q): axum::extract::Query<SavedQuery>,
+) -> Response {
+    let snap = state.settings.snapshot();
+    render(AdminEngineeringPage {
+        active_tab: "engineering",
         port: snap.port,
         mount_path: snap.mount_path,
         source_password: snap.source_password,
@@ -767,17 +856,7 @@ async fn admin_get(State(state): State<EngineState>) -> Response {
         station_bitrate_kbps: snap.station_bitrate_kbps,
         apply_loudness_normalization: snap.apply_loudness_normalization,
         crossfade_seconds: snap.crossfade_seconds,
-        track_count,
-        now_playing_title: np.as_ref().map(|n| n.title.clone()),
-        now_playing_artist: np.as_ref().and_then(|n| {
-            if n.artist.is_empty() {
-                None
-            } else {
-                Some(n.artist.clone())
-            }
-        }),
-        recording_path,
-        saved: None,
+        saved: q.saved.is_some(),
     })
 }
 
@@ -812,12 +891,32 @@ async fn admin_post(State(state): State<EngineState>, Form(form): Form<SettingsF
         snap.crossfade_seconds = x.min(10);
     }
     let _ = state.settings.replace(snap);
-    Redirect::to("/admin/radio?saved=1").into_response()
+    Redirect::to("/admin/radio/engineering?saved=1").into_response()
 }
 
 // ============================================================================
 // Public now-playing endpoint
 // ============================================================================
+
+async fn public_library(State(state): State<EngineState>) -> Response {
+    let tracks = state
+        .db
+        .as_ref()
+        .and_then(|db| db.all_tracks().ok())
+        .unwrap_or_default();
+    let rows: Vec<_> = tracks
+        .into_iter()
+        .map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "title": t.title,
+                "artist": t.artist,
+                "duration_seconds": t.duration_seconds,
+            })
+        })
+        .collect();
+    Json(rows).into_response()
+}
 
 async fn public_now_playing(State(state): State<EngineState>) -> Response {
     let snap = state
@@ -833,14 +932,23 @@ async fn public_now_playing(State(state): State<EngineState>) -> Response {
         .cloned()
         .collect();
     let s = state.settings.snapshot();
+    let recording = state
+        .recording
+        .read()
+        .expect("recording poisoned")
+        .as_ref()
+        .map(|h| h.path.clone());
     Json(serde_json::json!({
         "now_playing": snap,
         "history": history,
         "live": state.source_alive.load(Ordering::SeqCst),
+        "relay": state.relay_alive.load(Ordering::SeqCst),
+        "recording": recording,
         "listeners": state.listener_count.load(Ordering::SeqCst),
         "stream_name": s.stream_name,
         "mount_path": s.mount_path,
         "radio_port": s.port,
+        "now_unix": unix_now(),
     }))
     .into_response()
 }

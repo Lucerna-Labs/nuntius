@@ -491,6 +491,7 @@ dependencies = [
  "ccc-core",
  "ccc-database",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -505,6 +506,7 @@ dependencies = [
  "ccc-database",
  "pulldown-cmark",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -540,6 +542,7 @@ dependencies = [
  "ccc-database",
  "lettre",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
 ]
@@ -574,6 +577,7 @@ dependencies = [
  "ccc-database",
  "rss",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "toml",
@@ -591,6 +595,7 @@ dependencies = [
  "ccc-database",
  "rust-s3",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
 ]
@@ -605,6 +610,7 @@ dependencies = [
  "ccc-core",
  "ccc-database",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
 ]
@@ -640,6 +646,7 @@ dependencies = [
  "ccc-core",
  "ccc-database",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
  "tower-http 0.5.2",

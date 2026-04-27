@@ -99,6 +99,9 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
             eprintln!("Skipping plugin '{}': {}", name, e);
         }
     }
+    // Freeze the manager so the CMS admin shell can hold a shared
+    // reference and serve `/admin/api/plugins/*` from live data.
+    let manager = Arc::new(manager);
 
     println!(
         "Starting Creator Command Center (CCC) on {} with {} plugin(s) enabled: {:?}",
@@ -119,6 +122,8 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
             store: cms.store.clone(),
             nav: manager.merged_admin_nav(&ctx),
             plugin_names: manager.names().iter().map(|s| s.to_string()).collect(),
+            plugin_manager: manager.clone(),
+            app_ctx: ctx.clone(),
         };
         let admin_tree = ccc_cms::build_admin_tree(dashboard_ctx, plugin_admin);
         app = app.merge(admin_tree);

@@ -1,0 +1,45 @@
+<nav class="radio-tabs" aria-label="Radio sections">
+  <a class="radio-tabs__tab{% if active_tab == "studio" %} is-active{% endif %}" href="/admin/radio">
+    <span class="radio-tabs__icon">🎙</span>
+    <span class="radio-tabs__label">Studio</span>
+  </a>
+  <a class="radio-tabs__tab{% if active_tab == "library" %} is-active{% endif %}" href="/admin/radio/tracks">
+    <span class="radio-tabs__icon">📚</span>
+    <span class="radio-tabs__label">Library</span>
+  </a>
+  <a class="radio-tabs__tab{% if active_tab == "playlists" %} is-active{% endif %}" href="/admin/radio/playlists">
+    <span class="radio-tabs__icon">🎼</span>
+    <span class="radio-tabs__label">Playlists</span>
+  </a>
+  <a class="radio-tabs__tab{% if active_tab == "engineering" %} is-active{% endif %}" href="/admin/radio/engineering">
+    <span class="radio-tabs__icon">🔧</span>
+    <span class="radio-tabs__label">Engineering</span>
+  </a>
+</nav>
+
+<style>
+  .radio-tabs {
+    display: flex; gap: 4px; margin: -16px -16px 18px;
+    padding: 8px 12px 0;
+    background: linear-gradient(180deg, #181a20 0%, #101116 100%);
+    border-bottom: 1px solid #2a2e36;
+  }
+  .radio-tabs__tab {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 16px;
+    border-radius: 5px 5px 0 0;
+    font-size: 13px; font-weight: 600; letter-spacing: 0.04em;
+    color: #8c93a3; text-decoration: none;
+    border: 1px solid transparent; border-bottom: none;
+    transition: color 120ms, background 120ms, border-color 120ms;
+    margin-bottom: -1px;
+  }
+  .radio-tabs__tab:hover { color: #e7eaf0; background: rgba(255,255,255,0.03); }
+  .radio-tabs__tab.is-active {
+    color: #e7eaf0;
+    background: linear-gradient(180deg, #14161b 0%, #0c0d10 100%);
+    border-color: #2a2e36;
+    box-shadow: inset 0 2px 0 0 #ff2a2a, 0 0 12px rgba(255, 42, 42, 0.15);
+  }
+  .radio-tabs__icon { font-size: 16px; line-height: 1; }
+</style>

@@ -3,6 +3,8 @@
 {% block title %}Track Library — Radio — Creator Command Center{% endblock %}
 
 {% block content %}
+{% include "_radio_tabs.html" %}
+
 <header class="cms-page__header">
   <h1>Track library</h1>
   <p class="cms-page__lede">{{ tracks.len() }} track(s). Total: {{ total_human }}.</p>

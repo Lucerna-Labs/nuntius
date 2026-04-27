@@ -19,7 +19,7 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use ccc_database::{CccDB, TranscriptionJob, TranscriptionStatus};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -144,11 +144,43 @@ impl CccPluginWhisperPlugin {
 
 impl Plugin for CccPluginWhisperPlugin {
     fn name(&self) -> &'static str {
-        "Whisper Transcription"
+        "Transcripts"
     }
 
     fn version(&self) -> &'static str {
         "0.2.0"
+    }
+
+    fn id(&self) -> String {
+        "whisper".into()
+    }
+    fn kind(&self) -> &'static str {
+        "STT"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-transcript"
+    }
+
+    fn status(&self, _ctx: &AppContext) -> PluginStatus {
+        let snap = self.settings.snapshot();
+        let avail = binary_available(&snap.binary);
+        PluginStatus {
+            state: if avail {
+                PluginLifecycle::Configured
+            } else {
+                PluginLifecycle::Unconfigured
+            },
+            badge: None,
+            detail: serde_json::json!({
+                "configured": avail,
+                "binary": snap.binary,
+                "default_model": snap.default_model,
+                "default_language": snap.default_language,
+                "output_dir": snap.output_dir,
+                "missing": if avail { Vec::<String>::new() } else { vec![format!("whisper binary '{}' on PATH", snap.binary)] },
+                "queue": Vec::<serde_json::Value>::new(),
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {

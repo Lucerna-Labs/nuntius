@@ -18,7 +18,9 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError};
+use ccc_core::{
+    AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError, PluginLifecycle, PluginStatus,
+};
 use ccc_database::{BlogPost, CccDB, PostStatus};
 use serde::Deserialize;
 use std::any::Any;
@@ -35,6 +37,49 @@ impl Plugin for StaticBlogPlugin {
 
     fn version(&self) -> &'static str {
         "0.2.0"
+    }
+
+    fn id(&self) -> String {
+        "blog".into()
+    }
+    fn kind(&self) -> &'static str {
+        "PUBLISHING"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-blog"
+    }
+
+    fn status(&self, ctx: &AppContext) -> PluginStatus {
+        let posts = ctx.db.all_blog_posts().unwrap_or_default();
+        let published = posts.iter().filter(|p| p.published_at.is_some()).count();
+        let drafts = posts.len() - published;
+        let recent: Vec<_> = posts
+            .iter()
+            .rev()
+            .take(8)
+            .map(|p| {
+                serde_json::json!({
+                    "id": p.id,
+                    "title": p.title,
+                    "status": if p.published_at.is_some() { "published" } else { "draft" },
+                    "when": p.published_at.map(relative_time).unwrap_or_else(|| "editing".into()),
+                    "views": 0u64,
+                })
+            })
+            .collect();
+        PluginStatus {
+            state: PluginLifecycle::Configured,
+            badge: if drafts > 0 {
+                Some(drafts.to_string())
+            } else {
+                None
+            },
+            detail: serde_json::json!({
+                "configured": true,
+                "recent": recent,
+                "counts": { "published": published, "drafts": drafts },
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
@@ -370,6 +415,25 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn relative_time(ts: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let diff = now.saturating_sub(ts);
+    if diff < 60 {
+        "just now".into()
+    } else if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86_400 {
+        format!("{}h ago", diff / 3600)
+    } else if diff < 2_592_000 {
+        format!("{}d ago", diff / 86_400)
+    } else {
+        format_unix(ts)
+    }
 }
 
 fn format_unix(ts: u64) -> String {

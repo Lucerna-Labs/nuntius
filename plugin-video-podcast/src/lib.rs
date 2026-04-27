@@ -21,7 +21,7 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use ccc_database::{CccDB, VideoPodcast, VideoStatus};
 use serde::Deserialize;
 use std::any::Any;
@@ -93,11 +93,40 @@ struct AppState {
 
 impl Plugin for VideoPodcastPlugin {
     fn name(&self) -> &'static str {
-        "P2P Video Podcast Publisher"
+        "Video Podcast"
     }
 
     fn version(&self) -> &'static str {
         "0.3.0"
+    }
+
+    fn id(&self) -> String {
+        "video-podcast".into()
+    }
+    fn kind(&self) -> &'static str {
+        "VIDEO"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-video"
+    }
+
+    fn status(&self, _ctx: &AppContext) -> PluginStatus {
+        let avail = ffmpeg_available(&self.ffmpeg);
+        PluginStatus {
+            state: if avail {
+                PluginLifecycle::Configured
+            } else {
+                PluginLifecycle::Unconfigured
+            },
+            badge: None,
+            detail: serde_json::json!({
+                "configured": avail,
+                "ffmpeg": *self.ffmpeg,
+                "hls_dir": self.hls_base_path,
+                "source_dir": self.source_dir.to_string_lossy(),
+                "missing": if avail { Vec::<String>::new() } else { vec!["ffmpeg binary on PATH".to_string()] },
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {

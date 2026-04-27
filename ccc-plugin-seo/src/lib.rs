@@ -17,7 +17,7 @@ use axum::{
     routing::get,
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use ccc_database::{CccDB, PostStatus};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -140,6 +140,36 @@ impl Plugin for CccPluginSeoPlugin {
 
     fn version(&self) -> &'static str {
         "0.2.0"
+    }
+
+    fn id(&self) -> String {
+        "seo".into()
+    }
+    fn kind(&self) -> &'static str {
+        "METADATA"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-seo"
+    }
+
+    fn status(&self, _ctx: &AppContext) -> PluginStatus {
+        let s = self.settings.snapshot();
+        let placeholder = s.site_url.contains("example.com");
+        PluginStatus {
+            state: if placeholder {
+                PluginLifecycle::Unconfigured
+            } else {
+                PluginLifecycle::Configured
+            },
+            badge: None,
+            detail: serde_json::json!({
+                "configured": !placeholder,
+                "site_name": s.site_name,
+                "site_url": s.site_url,
+                "default_description": s.default_description,
+                "warning": if placeholder { Some("site_url still pointing at example.com".to_string()) } else { None },
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {

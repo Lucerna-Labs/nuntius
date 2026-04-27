@@ -1,48 +1,310 @@
-{% extends "_layout.html" %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nuntius — Creator Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin/static/nuntius.css">
+</head>
+<body data-admin-username="{{ admin_username }}">
 
-{% block title %}Dashboard — Creator Command Center{% endblock %}
+<div class="app">
 
-{% block nav %}
-<a class="cms-nav__item cms-nav__item--active" href="/admin/">Dashboard</a>
-{% for section in nav %}
-  <a class="cms-nav__item" href="{{ section.href }}">{{ section.label }}</a>
-{% endfor %}
-<a class="cms-nav__item cms-nav__item--bottom" href="/admin/logout">Sign out ({{ admin_username }})</a>
-{% endblock %}
+  <!-- =================== LEFT RAIL =================== -->
+  <nav class="rail" id="rail">
+    <div class="rail-brand" id="brand">
+      <div class="rail-mark"></div>
+      <div class="rail-brand-text">
+        <span class="name">Nuntius</span>
+        <small>Creator Command Center</small>
+      </div>
+    </div>
 
-{% block content %}
-<header class="cms-page__header">
-  <h1>Dashboard</h1>
-  <p class="cms-page__lede">
-    Welcome back, {{ admin_username }}. {{ plugin_count }} plugin(s) enabled.
-  </p>
-</header>
+    <div class="rail-list" id="railList">
+      <!-- injected from /admin/api/plugins -->
+    </div>
 
-<section class="cms-grid">
-  {% for section in nav %}
-    <a class="cms-tile" href="{{ section.href }}">
-      <span class="cms-tile__icon" aria-hidden="true">{{ section.icon }}</span>
-      <span class="cms-tile__label">{{ section.label }}</span>
-    </a>
-  {% endfor %}
-</section>
+    <div class="rail-foot">
+      <div class="rail-item" id="cmdkBtn" title="Command palette (⌘K)">
+        <div class="rail-icon">⌘K</div>
+        <div class="rail-label">Quick Search</div>
+        <span class="rail-badge">⌘K</span>
+      </div>
+      <a class="rail-item" id="logoutBtn" href="/admin/logout">
+        <div class="rail-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
+          </svg>
+        </div>
+        <div class="rail-label">Sign out</div>
+      </a>
+      <div class="rail-item" id="userBtn">
+        <div class="rail-icon" style="background:linear-gradient(135deg, #5ce0d6, #2a6e6a); color:#0c1014;">{{ admin_username }}</div>
+        <div class="rail-label">{{ admin_username }}</div>
+        <span class="rail-badge ok">ADM</span>
+      </div>
+    </div>
+  </nav>
 
-<section class="cms-section">
-  <h2>Active plugins</h2>
-  <ul class="cms-list">
-    {% for name in plugin_names %}
-      <li class="cms-list__item">{{ name }}</li>
-    {% endfor %}
-  </ul>
-</section>
-{% endblock %}
+  <!-- =================== STAGE =================== -->
+  <div class="stage">
 
-{% block right_rail %}
-<div class="cms-rail__card">
-  <h3>Quick links</h3>
-  <ul class="cms-rail__list">
-    <li><a href="/health">API health</a></li>
-    <li><a href="/version">API version</a></li>
-  </ul>
+    <!-- HOME = RADIO CONSOLE -->
+    <div class="home" id="home">
+      <div class="console">
+
+        <div class="topbar">
+          <div class="station-id">
+            <div class="name" id="stationName">Station</div>
+            <small id="stationMeta">— · —</small>
+          </div>
+
+          <button class="onair-badge" id="onairBadge">
+            <span class="dot"></span>
+            <span id="onairText">OFF AIR</span>
+          </button>
+
+          <div class="vitals">
+            <div class="vital">
+              <div class="lbl">Listeners</div>
+              <div class="val accent" id="vListeners">0</div>
+            </div>
+            <div class="vital">
+              <div class="lbl">Peak</div>
+              <div class="val mono" id="vPeak">0</div>
+            </div>
+            <div class="vital">
+              <div class="lbl">Bitrate</div>
+              <div class="val mono" id="vBitrate">—</div>
+            </div>
+            <div class="vital">
+              <div class="lbl">Uptime</div>
+              <div class="val mono" id="vUptime">00:00:00</div>
+            </div>
+            <div class="vital">
+              <div class="lbl">Local</div>
+              <div class="val mono" id="vClock">--:--:--</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mix-grid">
+
+          <div class="mix-pane">
+            <div class="pane-head">
+              <h3><span class="num">01</span>Library</h3>
+              <a class="pane-act" href="/admin/radio/tracks">Manage</a>
+            </div>
+            <div class="lib-search">
+              <input type="text" id="libSearch" placeholder="Search title or artist..." />
+            </div>
+            <a class="upload-zone" href="/admin/radio/tracks">
+              <div class="icon">[ + ]</div>
+              <div>Upload tracks</div>
+              <div class="mono">MP3 · WAV · FLAC · OGG · M4A</div>
+            </a>
+            <div class="pane-body">
+              <div class="track-list" id="trackList">
+                <div style="padding: 30px 12px; text-align: center; color: #4a5563; font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.15em;">
+                  — LOADING LIBRARY —
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mix-pane">
+            <div class="now-playing">
+              <div class="np-row">
+                <div class="np-art" id="npArt">
+                  <div class="bars" id="npBars" style="display:none;"><span></span><span></span><span></span><span></span></div>
+                  <span id="npArtIcon">IDLE</span>
+                </div>
+                <div class="np-info">
+                  <div class="np-label" id="npLabel">— BROADCASTING NOTHING —</div>
+                  <div class="np-title" id="npTitle">Press START STREAM to go live</div>
+                  <div class="np-artist" id="npArtist">No active source</div>
+                </div>
+                <div class="np-time">
+                  <div class="elapsed" id="npElapsed">0:00</div>
+                  <div>/ <span id="npDuration">0:00</span></div>
+                </div>
+              </div>
+              <div class="progress"><div class="progress-fill" id="npProgress"></div></div>
+            </div>
+
+            <div class="decks">
+              <div class="deck" id="deckA" data-deck="A">
+                <div class="deck-head">
+                  <div class="deck-name"><span class="id">A</span>DECK</div>
+                  <div class="deck-state" id="stateA">EMPTY</div>
+                </div>
+                <div class="deck-track empty" id="trackA"><span>— DROP TRACK (v2) —</span></div>
+                <div class="waveform">
+                  <canvas id="waveA"></canvas>
+                  <div class="waveform-cursor" id="cursorA"></div>
+                </div>
+                <div class="deck-controls">
+                  <button class="deck-btn cue" data-action="cue" data-deck="A" disabled>CUE</button>
+                  <button class="deck-btn primary" data-action="play" data-deck="A" disabled>▸ PLAY</button>
+                  <button class="deck-btn" data-action="stop" data-deck="A" disabled>■</button>
+                </div>
+                <div class="deck-time">
+                  <span class="t" id="timeA">0:00</span>
+                  <span class="r" id="remA">-0:00</span>
+                </div>
+              </div>
+
+              <div class="crossfader">
+                <div class="xf-label">CROSS<br>FADER</div>
+                <div class="xf-track" id="xfTrack"><div class="xf-thumb" id="xfThumb"></div></div>
+                <div class="xf-ends"><span>A</span><span>B</span></div>
+              </div>
+
+              <div class="deck" id="deckB" data-deck="B">
+                <div class="deck-head">
+                  <div class="deck-name"><span class="id">B</span>DECK</div>
+                  <div class="deck-state" id="stateB">EMPTY</div>
+                </div>
+                <div class="deck-track empty" id="trackB"><span>— DROP TRACK (v2) —</span></div>
+                <div class="waveform">
+                  <canvas id="waveB"></canvas>
+                  <div class="waveform-cursor" id="cursorB"></div>
+                </div>
+                <div class="deck-controls">
+                  <button class="deck-btn cue" data-action="cue" data-deck="B" disabled>CUE</button>
+                  <button class="deck-btn primary" data-action="play" data-deck="B" disabled>▸ PLAY</button>
+                  <button class="deck-btn" data-action="stop" data-deck="B" disabled>■</button>
+                </div>
+                <div class="deck-time">
+                  <span class="t" id="timeB">0:00</span>
+                  <span class="r" id="remB">-0:00</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="input-strip">
+              <div class="input-channel" id="micChan">
+                <div class="ic-head"><div class="ic-name">MIC ⌬ HOST</div><div class="ic-state" id="micState">v2</div></div>
+                <div class="ic-meter"><div class="ic-meter-fill" id="micMeter"></div></div>
+                <div class="ic-fader" data-fader="mic"><div class="ic-fader-fill" style="width:75%"></div><div class="ic-fader-thumb" style="left:75%"></div></div>
+                <div class="ic-action">
+                  <button class="ic-btn" id="micConnect" disabled>v2 / WebRTC</button>
+                </div>
+              </div>
+
+              <div class="input-channel" id="callerChan">
+                <div class="ic-head"><div class="ic-name">CALLER LINE</div><div class="ic-state" id="callerState">v2</div></div>
+                <div class="ic-meter"><div class="ic-meter-fill" id="callerMeter"></div></div>
+                <div class="ic-fader" data-fader="caller"><div class="ic-fader-fill" style="width:65%"></div><div class="ic-fader-thumb" style="left:65%"></div></div>
+                <div class="ic-action">
+                  <button class="ic-btn" id="callerSim" disabled>v2 / WebRTC</button>
+                </div>
+              </div>
+
+              <div class="input-channel" id="autoChan">
+                <div class="ic-head"><div class="ic-name">AUTO ⌬ DJ</div><div class="ic-state" id="autoState">SERVER</div></div>
+                <div class="ic-meter"><div class="ic-meter-fill" style="width:0%"></div></div>
+                <div class="ic-fader" data-fader="auto"><div class="ic-fader-fill" style="width:80%"></div><div class="ic-fader-thumb" style="left:80%"></div></div>
+                <div class="ic-action">
+                  <a class="ic-btn connect" href="/admin/radio/playlists" style="display:flex; align-items:center; justify-content:center; text-decoration:none;">PLAYLISTS</a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mix-pane right-pane">
+            <div class="tabs">
+              <button class="tab on" data-tab="queue">Queue<span class="badge" id="queueBadge">0</span></button>
+              <button class="tab" data-tab="schedule">Sched.</button>
+              <button class="tab" data-tab="callers">Callers<span class="badge" id="callerBadge" style="display:none;">0</span></button>
+              <button class="tab" data-tab="chat">Chat</button>
+            </div>
+            <div class="tab-panel on" id="panelQueue">
+              <div class="queue-list" id="queueList">
+                <div style="padding:30px 20px; text-align:center; color:#4a5563; font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.15em;">— QUEUE EMPTY —<br><br>Coming in v2 (browser-source decks)</div>
+              </div>
+            </div>
+            <div class="tab-panel" id="panelSchedule">
+              <div class="schedule-list" id="scheduleList"></div>
+            </div>
+            <div class="tab-panel" id="panelCallers">
+              <div id="callerList">
+                <div class="callers-empty">— CALLERS —<br><br>Coming in v2 (WebRTC)</div>
+              </div>
+            </div>
+            <div class="tab-panel chat-pane" id="panelChat">
+              <div class="chat-msgs" id="chatMsgs"></div>
+              <div class="chat-input">
+                <input type="text" id="chatInput" placeholder="Listener chat (v2)..." disabled />
+                <button id="chatSend" disabled>SEND</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="footer">
+          <div class="stream-status">
+            <div class="ss-item"><div class="lbl">Icecast</div><div class="val ok" id="icecastStatus">● READY</div></div>
+            <div class="ss-item"><div class="lbl">Mount</div><div class="val mono" id="mountVal">/listen.mp3</div></div>
+            <div class="ss-item"><div class="lbl">Engine</div><div class="val mono">ccc-radio · rs</div></div>
+            <div class="ss-item"><div class="lbl">Network</div><div class="val ok mono" id="vNet">↑ 0.0 KB/s</div></div>
+          </div>
+
+          <div class="master-meters">
+            <div class="mm-row"><div class="mm-ch">L</div><div class="mm-bar"><div class="mm-fill" id="masterL"></div></div></div>
+            <div class="mm-row"><div class="mm-ch">R</div><div class="mm-bar"><div class="mm-fill" id="masterR"></div></div></div>
+            <div class="mm-labels">
+              <span>-40</span><span>-30</span><span>-20</span><span>-10</span><span>-6</span><span>-3</span><span>0</span><span>+3</span>
+            </div>
+          </div>
+
+          <div class="stream-actions">
+            <a class="sa-btn ghost" href="/admin/radio/engineering">⌬ ENGINEERING</a>
+            <a class="sa-btn ghost" href="/admin/radio/tracks">LIBRARY</a>
+            <a class="sa-btn primary" href="/admin/radio">OPEN PANEL</a>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <aside class="panel-host" id="panelHost">
+      <div class="panel-head">
+        <div class="panel-title">
+          <div class="icon" id="panelIcon"></div>
+          <div class="text">
+            <h2 id="panelName">—</h2>
+            <small id="panelKind">PLUGIN</small>
+          </div>
+        </div>
+        <button class="panel-close" id="panelClose">CLOSE · ESC</button>
+      </div>
+      <div class="panel-body" id="panelBody"></div>
+    </aside>
+
+  </div>
 </div>
-{% endblock %}
+
+<div class="cmdk-bg" id="cmdkBg">
+  <div class="cmdk">
+    <input class="cmdk-input" id="cmdkInput" placeholder="Jump to a plugin, action, or page..." autocomplete="off" />
+    <div class="cmdk-list" id="cmdkList"></div>
+    <div class="cmdk-foot">
+      <span><span class="kbd">↑↓</span> navigate</span>
+      <span><span class="kbd">↵</span> open</span>
+      <span><span class="kbd">esc</span> close</span>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<audio id="streamAudio" preload="none" crossorigin="anonymous"></audio>
+
+<script src="/admin/static/nuntius.js" defer></script>
+</body>
+</html>

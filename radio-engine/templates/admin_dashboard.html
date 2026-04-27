@@ -1,136 +1,439 @@
 {% extends "_admin_layout.html" %}
 
-{% block title %}Radio — Creator Command Center{% endblock %}
+{% block title %}Studio — Radio — Creator Command Center{% endblock %}
 
 {% block content %}
-<header class="cms-page__header">
-  <h1>Radio</h1>
-  <p class="cms-page__lede">Native Icecast-compatible source/listener pump.</p>
-</header>
+{% include "_radio_tabs.html" %}
 
-{% match saved %}
-  {% when Some with (_) %}
-    <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">Saved.</div>
-  {% when None %}
-{% endmatch %}
+<style>
+  /* ============ Studio surface ============ */
+  .studio {
+    --panel: #14161b;
+    --panel-2: #1c1f26;
+    --rim: #2a2e36;
+    --rim-2: #404652;
+    --ink: #e7eaf0;
+    --ink-dim: #8c93a3;
+    --led-red: #ff2a2a;
+    --led-red-glow: 0 0 12px rgba(255, 42, 42, 0.85), 0 0 28px rgba(255, 42, 42, 0.45);
+    --led-amber: #ffb12a;
+    --led-green: #29e07a;
+    --led-blue: #5b9eff;
+    color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .cms-shell__main { background: linear-gradient(180deg, #0c0d10 0%, #0a0b0e 100%); }
+  .studio__topbar {
+    display: flex; align-items: center; gap: 24px;
+    padding: 16px 20px; margin: 0 0 18px;
+    background: linear-gradient(180deg, #181a20 0%, #101116 100%);
+    border: 1px solid #2a2e36; border-radius: 8px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+  .on-air {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 18px;
+    border: 2px solid #3a0808; border-radius: 6px;
+    background: radial-gradient(120% 200% at 50% 0%, #2a0606 0%, #120303 70%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 0 rgba(0,0,0,0.5);
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 800;
+    font-size: 18px; color: #6b1818;
+    transition: color 200ms, box-shadow 200ms, border-color 200ms, background 200ms;
+  }
+  .on-air__lamp {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #2a0606;
+    box-shadow: inset 0 0 6px rgba(0,0,0,0.8);
+    transition: background 150ms, box-shadow 150ms;
+  }
+  .on-air.is-on {
+    color: #ffe7e7;
+    border-color: #ff5050;
+    background: radial-gradient(120% 200% at 50% 0%, #6b0e0e 0%, #2a0303 70%);
+    text-shadow: 0 0 8px rgba(255, 60, 60, 0.7);
+    box-shadow: 0 0 22px rgba(255, 30, 30, 0.35), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+  .on-air.is-on .on-air__lamp {
+    background: var(--led-red);
+    box-shadow: var(--led-red-glow), inset 0 0 4px rgba(255,200,200,0.7);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.25); } }
+  .source-pill {
+    padding: 6px 12px; border-radius: 4px;
+    background: var(--panel-2); border: 1px solid var(--rim);
+    font-family: "Segoe UI", system-ui; font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.14em; color: var(--ink-dim);
+  }
+  .source-pill.is-live { color: #ffd2d2; border-color: #5a2222; background: #2a0e0e; }
+  .source-pill.is-relay { color: #cfe1ff; border-color: #1f3d72; background: #0e1c33; }
+  .source-pill.is-autodj { color: #c9f3da; border-color: #1d5a36; background: #0e2b1a; }
 
-<section class="cms-grid" style="margin-bottom: 24px;">
-  <div class="cms-tile" style="cursor: default;">
-    <span class="cms-tile__label">Source</span>
-    <span style="font-size: 22px; font-weight: 700;">{% if source_alive %}Live{% else if relay_alive %}Relay{% else %}AutoDJ / Idle{% endif %}</span>
-  </div>
-  <div class="cms-tile" style="cursor: default;">
-    <span class="cms-tile__label">Listeners</span>
-    <span style="font-size: 28px; font-weight: 700;">{{ listeners }}</span>
-  </div>
-  <div class="cms-tile" style="cursor: default;">
-    <span class="cms-tile__label">Library</span>
-    <span style="font-size: 28px; font-weight: 700;">{{ track_count }}</span>
-  </div>
-  <div class="cms-tile" style="cursor: default;">
-    <span class="cms-tile__label">Port</span>
-    <span style="font-size: 28px; font-weight: 700;">{{ port }}</span>
-  </div>
-</section>
+  .listeners {
+    margin-left: auto;
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 8px 16px; border-radius: 4px;
+    background: #0a0b0e; border: 1px solid var(--rim); border-top-color: #0a0b0e;
+    box-shadow: inset 0 4px 8px rgba(0,0,0,0.6);
+    font-variant-numeric: tabular-nums;
+  }
+  .listeners__count {
+    font-family: "Consolas", "Monaco", monospace; font-weight: 700; font-size: 28px;
+    color: #5be0ff; text-shadow: 0 0 8px rgba(91, 224, 255, 0.5);
+    letter-spacing: 0.06em;
+  }
+  .listeners__label { font-size: 11px; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.16em; }
 
-<section class="cms-section" style="margin-bottom: 24px;">
-  <h2>Recording</h2>
-  {% match recording_path %}
-    {% when Some with (p) %}
-      <p>Recording to <code style="word-break:break-all;">{{ p }}</code>.</p>
-      <form method="post" action="/admin/radio/record/stop">
-        <button class="cms-btn cms-btn--danger" type="submit">Stop recording</button>
-      </form>
-    {% when None %}
-      <p>Off air. Recording captures every byte broadcast — both AutoDJ and live source — to a timestamped file in the library directory.</p>
-      <form method="post" action="/admin/radio/record/start">
-        <button class="cms-btn cms-btn--primary" type="submit">Start recording</button>
-      </form>
-  {% endmatch %}
-</section>
+  /* ============ Deck (now-playing + VU) ============ */
+  .deck { display: grid; grid-template-columns: 1fr 220px; gap: 16px; margin-bottom: 18px; }
+  .panel {
+    background: linear-gradient(180deg, var(--panel) 0%, #101216 100%);
+    border: 1px solid var(--rim); border-radius: 8px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.5);
+  }
+  .np { padding: 22px 24px; display: flex; gap: 22px; align-items: stretch; }
+  .np__art {
+    width: 140px; height: 140px; border-radius: 4px; flex-shrink: 0;
+    background: repeating-linear-gradient(45deg, #1a1d24 0 6px, #14171d 6px 12px);
+    border: 1px solid var(--rim-2);
+    display: grid; place-items: center; font-size: 56px; opacity: 0.85;
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.6);
+  }
+  .np__meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+  .np__source {
+    align-self: flex-start;
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 3px;
+    background: var(--panel-2); border: 1px solid var(--rim); color: var(--ink-dim);
+  }
+  .np__title {
+    font-size: 28px; font-weight: 700; line-height: 1.1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .np__artist {
+    font-size: 16px; color: var(--ink-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .np__progress { margin-top: auto; display: flex; flex-direction: column; gap: 5px; }
+  .np__bar {
+    height: 4px; background: #0a0b0e; border-radius: 2px; overflow: hidden;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.7);
+  }
+  .np__bar-fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--led-blue), #8fc4ff);
+    box-shadow: 0 0 8px rgba(91, 158, 255, 0.6);
+    transition: width 250ms linear;
+  }
+  .np__times { display: flex; justify-content: space-between; font: 12px/1 "Consolas", monospace; color: var(--ink-dim); }
 
-<section class="cms-section" style="margin-bottom: 24px;">
-  <h2>Now playing</h2>
-  {% match now_playing_title %}
-    {% when Some with (title) %}
-      <p style="font-size:18px;">
-        <strong>{{ title }}</strong>
-        {% match now_playing_artist %}{% when Some with (a) %}<br><span style="color: var(--text-dim);">{{ a }}</span>{% when None %}{% endmatch %}
-      </p>
-    {% when None %}
-      <p style="color: var(--text-dim);">Nothing playing. Upload tracks at <a href="/admin/radio/tracks">Track library</a> to start AutoDJ.</p>
-  {% endmatch %}
-</section>
+  .vu { padding: 16px; display: flex; gap: 14px; align-items: stretch; }
+  .vu__channel { flex: 1; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+  .vu__label { font-size: 10px; letter-spacing: 0.2em; color: var(--ink-dim); }
+  .vu__cells {
+    flex: 1; min-height: 140px; width: 28px;
+    display: flex; flex-direction: column-reverse; gap: 2px;
+    padding: 4px; border-radius: 3px;
+    background: #060708; border: 1px solid var(--rim);
+    box-shadow: inset 0 0 8px rgba(0,0,0,0.8);
+  }
+  .vu__cell {
+    flex: 1; border-radius: 1px;
+    background: #0e1411; opacity: 0.35;
+    transition: opacity 60ms linear, background 60ms linear, box-shadow 60ms linear;
+  }
+  .vu__cell.lit-green { background: var(--led-green); opacity: 1; box-shadow: 0 0 4px rgba(41,224,122,0.6); }
+  .vu__cell.lit-amber { background: var(--led-amber); opacity: 1; box-shadow: 0 0 4px rgba(255,177,42,0.6); }
+  .vu__cell.lit-red   { background: var(--led-red); opacity: 1; box-shadow: 0 0 6px rgba(255,42,42,0.7); }
 
-<form method="post" action="/admin/radio" class="cms-form" style="max-width:640px">
-  <h2 style="margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);">Settings</h2>
-  <label class="cms-field">
-    <span class="cms-field__label">Source password</span>
-    <input class="cms-field__input" type="password" name="source_password" value="{{ source_password }}" required
-           autocomplete="new-password">
-    <span class="cms-field__hint">Username is always <code>source</code>. Configure your streaming software with this password.</span>
-  </label>
-  <label class="cms-field">
-    <span class="cms-field__label">Mount point</span>
-    <input class="cms-field__input" type="text" name="mount_path" value="{{ mount_path }}" required
-           pattern="/.+">
-    <span class="cms-field__hint">Begins with <code>/</code>. Listeners hit <code>http://your-host:{{ port }}{{ mount_path }}</code></span>
-  </label>
-  <label class="cms-field">
-    <span class="cms-field__label">Content type</span>
-    <input class="cms-field__input" type="text" name="content_type" value="{{ content_type }}" required>
-    <span class="cms-field__hint">e.g. <code>audio/mpeg</code> for MP3, <code>application/ogg</code> for Ogg/Opus.</span>
-  </label>
-  <label class="cms-field">
-    <span class="cms-field__label">Stream name (icy-name)</span>
-    <input class="cms-field__input" type="text" name="stream_name" value="{{ stream_name }}">
-    <span class="cms-field__hint">Shown by streaming software / players that read ICY headers.</span>
-  </label>
-  <label class="cms-field">
-    <span class="cms-field__label">Upstream relay URL (optional)</span>
-    <input class="cms-field__input" type="url" name="relay_url" value="{{ relay_url }}"
-           placeholder="http://upstream.example.com:8000/stream">
-    <span class="cms-field__hint">Pull bytes from another Icecast/SHOUTcast and rebroadcast. Live source connections override it; clear the field to disable.</span>
-  </label>
+  /* ============ Transport (just record) ============ */
+  .transport { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 18px; max-width: 360px; }
+  .tt {
+    padding: 16px; border-radius: 6px; cursor: pointer;
+    background: linear-gradient(180deg, #181a20 0%, #101216 100%);
+    border: 1px solid var(--rim);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.4);
+    color: var(--ink); text-align: left; font: inherit;
+    display: flex; align-items: center; gap: 14px; min-height: 60px; width: 100%;
+    transition: border-color 150ms, transform 60ms;
+  }
+  .tt:hover { border-color: var(--rim-2); }
+  .tt:active { transform: translateY(1px); }
+  .tt__icon { font-size: 22px; line-height: 1; flex-shrink: 0; }
+  .tt__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .tt__label { font-weight: 700; font-size: 14px; }
+  .tt__sub { font-size: 12px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tt.is-active { border-color: var(--led-red); box-shadow: 0 0 12px rgba(255,42,42,0.3), inset 0 1px 0 rgba(255,255,255,0.04); }
+  .tt.is-active .tt__icon { color: var(--led-red); text-shadow: 0 0 8px rgba(255,42,42,0.7); }
+  .tt-form { display: contents; }
 
-  <hr style="border: none; border-top: 1px solid var(--border); margin: 16px 0;">
-  <h2 style="margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);">AutoDJ encoding (requires ffmpeg)</h2>
+  /* ============ History ============ */
+  .history-panel { padding: 16px 20px 20px; margin-bottom: 18px; }
+  .history-panel h3 { margin: 0 0 12px; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-dim); }
+  .history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .history-list li {
+    display: grid; grid-template-columns: 80px 1fr; gap: 14px; align-items: center;
+    padding: 8px 10px; border-radius: 4px;
+    background: #0e1015; border: 1px solid #1a1d24;
+  }
+  .history-list .h__when { font: 12px "Consolas", monospace; color: var(--ink-dim); }
+  .history-list .h__what { font-size: 13px; }
+  .history-list .h__what b { font-weight: 700; }
+  .history-list .h__what em { font-style: normal; color: var(--ink-dim); }
 
-  <label class="cms-field">
-    <span class="cms-field__label">Station bitrate (kbps)</span>
-    <input class="cms-field__input" type="number" name="station_bitrate_kbps" value="{{ station_bitrate_kbps }}" min="32" max="320" step="32" required>
-    <span class="cms-field__hint">Output bitrate for re-encoded library tracks. 128 is good for music; 192–256 sounds noticeably better.</span>
-  </label>
+  @media (max-width: 900px) {
+    .deck { grid-template-columns: 1fr; }
+  }
+</style>
 
-  <label style="display:flex; gap:8px; align-items:flex-start; padding:6px 0;">
-    <input type="checkbox" name="apply_loudness_normalization" value="1" {% if apply_loudness_normalization %}checked{% endif %} style="margin-top: 4px;">
-    <span>Apply loudness normalization (EBU R128, target −23 LUFS). Each track's gain is measured at upload time.</span>
-  </label>
+<div class="studio">
+  <header class="studio__topbar">
+    <div class="on-air" id="onAir">
+      <span class="on-air__lamp"></span>
+      <span class="on-air__text" id="onAirText">OFF AIR</span>
+    </div>
+    <div class="source-pill" id="sourcePill">SILENT</div>
+    <div class="listeners">
+      <span class="listeners__count" id="listenerCount">0</span>
+      <span class="listeners__label">listening</span>
+    </div>
+  </header>
 
-  <label class="cms-field">
-    <span class="cms-field__label">Crossfade (seconds)</span>
-    <input class="cms-field__input" type="number" name="crossfade_seconds" value="{{ crossfade_seconds }}" min="0" max="10" required>
-    <span class="cms-field__hint">Duration of the fade-out at track end and fade-in at the next track's start. 0 = hard cuts. 2 is gentle; 5+ is overlapping radio-style.</span>
-  </label>
+  <section class="deck">
+    <div class="panel np">
+      <div class="np__art" id="npArt">♪</div>
+      <div class="np__meta">
+        <span class="np__source" id="npSource">—</span>
+        <div class="np__title" id="npTitle">Off air</div>
+        <div class="np__artist" id="npArtist">Upload tracks under the Library tab to start AutoDJ</div>
+        <div class="np__progress">
+          <div class="np__bar"><div class="np__bar-fill" id="npProgress"></div></div>
+          <div class="np__times">
+            <span id="npElapsed">0:00</span>
+            <span id="npDuration">0:00</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="panel vu">
+      <div class="vu__channel">
+        <div class="vu__label">L</div>
+        <div class="vu__cells" id="vuLeft"></div>
+      </div>
+      <div class="vu__channel">
+        <div class="vu__label">R</div>
+        <div class="vu__cells" id="vuRight"></div>
+      </div>
+    </div>
+  </section>
 
-  <button class="cms-btn cms-btn--primary" type="submit">Save</button>
-</form>
+  <section class="transport">
+    <form class="tt-form" method="post" action="{% match recording_path %}{% when Some with (_) %}/admin/radio/record/stop{% when None %}/admin/radio/record/start{% endmatch %}">
+      <button type="submit" class="tt {% match recording_path %}{% when Some with (_) %}is-active{% when None %}{% endmatch %}" title="Toggle recording">
+        <span class="tt__icon">⏺</span>
+        <span class="tt__text">
+          <span class="tt__label">{% match recording_path %}{% when Some with (_) %}Recording — click to stop{% when None %}Record broadcast{% endmatch %}</span>
+          <span class="tt__sub">{% match recording_path %}{% when Some with (p) %}{{ p }}{% when None %}Capture every byte to disk{% endmatch %}</span>
+        </span>
+      </button>
+    </form>
+  </section>
+
+  <section class="panel history-panel">
+    <h3>Recently played</h3>
+    <ul class="history-list" id="historyList">
+      <li><span class="h__when">—</span><span class="h__what"><em>history will appear here as tracks air</em></span></li>
+    </ul>
+  </section>
+</div>
+
+<audio id="streamAudio" preload="none" crossorigin="anonymous" style="display:none"></audio>
+
+<script>
+(function() {
+  const STREAM_PORT = {{ port }};
+  const STREAM_MOUNT = "{{ mount_path }}";
+  const STATE = {
+    started_at: 0, duration: 0,
+    last_now_unix: 0, last_now_ts_local: Date.now() / 1000,
+  };
+
+  const VU_CELLS = 18;
+  function buildVu(id) {
+    const wrap = document.getElementById(id);
+    for (let i = 0; i < VU_CELLS; i++) {
+      const c = document.createElement('div');
+      c.className = 'vu__cell';
+      wrap.appendChild(c);
+    }
+    return Array.from(wrap.children);
+  }
+  const vuL = buildVu('vuLeft');
+  const vuR = buildVu('vuRight');
+  function paintVu(cells, level) {
+    const lit = Math.round(level * VU_CELLS);
+    for (let i = 0; i < VU_CELLS; i++) {
+      const cell = cells[i];
+      cell.classList.remove('lit-green', 'lit-amber', 'lit-red');
+      if (i < lit) {
+        if (i >= VU_CELLS - 3) cell.classList.add('lit-red');
+        else if (i >= VU_CELLS - 6) cell.classList.add('lit-amber');
+        else cell.classList.add('lit-green');
+      }
+    }
+  }
+
+  let audioCtx = null, analyserL = null, analyserR = null, audioEl = null, started = false;
+  function ensureAudio() {
+    if (started) return;
+    started = true;
+    audioEl = document.getElementById('streamAudio');
+    audioEl.src = "http://" + window.location.hostname + ":" + STREAM_PORT + STREAM_MOUNT;
+    audioEl.crossOrigin = "anonymous";
+    audioEl.muted = true;
+    audioEl.play().catch(() => {});
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = audioCtx.createMediaElementSource(audioEl);
+      const splitter = audioCtx.createChannelSplitter(2);
+      analyserL = audioCtx.createAnalyser(); analyserL.fftSize = 1024;
+      analyserR = audioCtx.createAnalyser(); analyserR.fftSize = 1024;
+      src.connect(splitter);
+      splitter.connect(analyserL, 0);
+      splitter.connect(analyserR, 1);
+    } catch (e) { console.warn('VU analyser unavailable:', e); }
+  }
+
+  function rms(analyser) {
+    if (!analyser) return 0;
+    const buf = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.min(1, Math.sqrt(sum / buf.length) * 2);
+  }
+
+  let prevL = 0, prevR = 0;
+  function frame() {
+    let l = rms(analyserL), r = rms(analyserR);
+    prevL = l > prevL ? l * 0.7 + prevL * 0.3 : prevL * 0.85 + l * 0.15;
+    prevR = r > prevR ? r * 0.7 + prevR * 0.3 : prevR * 0.85 + r * 0.15;
+    paintVu(vuL, prevL);
+    paintVu(vuR, prevR);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  function fmtTime(s) {
+    s = Math.max(0, Math.floor(s));
+    return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function applyStatus(j) {
+    const np = j.now_playing;
+    const live = !!j.live, relay = !!j.relay;
+    const onAir = document.getElementById('onAir');
+    const onAirText = document.getElementById('onAirText');
+    const isAiring = !!(np || live || relay);
+    onAir.classList.toggle('is-on', isAiring);
+    onAirText.textContent = isAiring ? 'ON AIR' : 'OFF AIR';
+
+    const pill = document.getElementById('sourcePill');
+    pill.classList.remove('is-live', 'is-relay', 'is-autodj');
+    if (live) { pill.textContent = 'LIVE SOURCE'; pill.classList.add('is-live'); }
+    else if (relay) { pill.textContent = 'RELAY'; pill.classList.add('is-relay'); }
+    else if (np) { pill.textContent = 'AUTODJ'; pill.classList.add('is-autodj'); }
+    else pill.textContent = 'SILENT';
+
+    document.getElementById('listenerCount').textContent = j.listeners || 0;
+
+    const npTitle = document.getElementById('npTitle');
+    const npArtist = document.getElementById('npArtist');
+    const npSource = document.getElementById('npSource');
+    if (np) {
+      npTitle.textContent = np.title || '—';
+      npArtist.textContent = np.artist || '';
+      npSource.textContent = (np.source || 'autodj').toUpperCase();
+      STATE.started_at = np.started_at || 0;
+      STATE.duration = np.duration_seconds || 0;
+      STATE.last_now_unix = j.now_unix || 0;
+      STATE.last_now_ts_local = Date.now() / 1000;
+    } else {
+      npTitle.textContent = 'Off air';
+      npArtist.textContent = 'Upload tracks under the Library tab to start AutoDJ';
+      npSource.textContent = '—';
+      STATE.started_at = 0; STATE.duration = 0;
+    }
+
+    const hist = j.history || [];
+    const list = document.getElementById('historyList');
+    if (hist.length === 0) {
+      list.innerHTML = '<li><span class="h__when">—</span><span class="h__what"><em>history will appear here as tracks air</em></span></li>';
+    } else {
+      list.innerHTML = hist.slice(0, 10).map(h => {
+        const d = new Date((h.started_at || 0) * 1000);
+        return '<li><span class="h__when">' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') + '</span>' +
+          '<span class="h__what"><b>' + escapeHtml(h.title || '—') + '</b>' +
+          (h.artist ? ' <em>· ' + escapeHtml(h.artist) + '</em>' : '') +
+          '</span></li>';
+      }).join('');
+    }
+
+    if (isAiring && !started) ensureAudio();
+  }
+
+  function tickProgress() {
+    if (STATE.duration > 0 && STATE.started_at > 0) {
+      const drift = (Date.now() / 1000) - STATE.last_now_ts_local;
+      const serverNow = STATE.last_now_unix + drift;
+      const elapsed = Math.max(0, serverNow - STATE.started_at);
+      const pct = Math.min(100, (elapsed / STATE.duration) * 100);
+      document.getElementById('npProgress').style.width = pct + '%';
+      document.getElementById('npElapsed').textContent = fmtTime(elapsed);
+      document.getElementById('npDuration').textContent = fmtTime(STATE.duration);
+    } else {
+      document.getElementById('npProgress').style.width = '0%';
+      document.getElementById('npElapsed').textContent = '0:00';
+      document.getElementById('npDuration').textContent = '0:00';
+    }
+  }
+  setInterval(tickProgress, 250);
+
+  function poll() {
+    fetch('/api/radio/nowplaying', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(applyStatus)
+      .catch(() => {});
+  }
+  poll();
+  setInterval(poll, 2000);
+
+  document.addEventListener('click', ensureAudio, { once: true });
+  document.addEventListener('keydown', ensureAudio, { once: true });
+})();
+</script>
 {% endblock %}
 
 {% block right_rail %}
 <div class="cms-rail__card">
-  <h3>Streaming software setup</h3>
-  <ul class="cms-rail__list">
-    <li>Server: this host</li>
-    <li>Port: <code>{{ port }}</code></li>
-    <li>Mount: <code>{{ mount_path }}</code></li>
-    <li>User: <code>source</code></li>
-    <li>Password: (the one above)</li>
-    <li>Format: matches Content type</li>
-  </ul>
+  <h3>Library</h3>
+  <p style="margin:0; font-size:13px;">{{ track_count }} track{% if track_count != 1 %}s{% endif %} on disk. Add more via the <a href="/admin/radio/tracks">Library</a> tab.</p>
 </div>
 <div class="cms-rail__card" style="margin-top:24px">
   <h3>Listen URL</h3>
-  <p style="font-family:monospace; word-break:break-all;">http://&lt;host&gt;:{{ port }}{{ mount_path }}</p>
+  <p style="font-family:monospace; word-break:break-all; font-size:12px;">http://&lt;host&gt;:{{ port }}{{ mount_path }}</p>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Priority</h3>
+  <p style="margin:0; color: var(--text-dim, #8c93a3); font-size: 13px; line-height: 1.5;">
+    Live source &gt; Relay &gt; AutoDJ. A live broadcaster connecting always preempts — the dashboard
+    flips to <strong>LIVE SOURCE</strong> within a chunk.
+  </p>
 </div>
 {% endblock %}

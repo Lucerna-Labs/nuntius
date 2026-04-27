@@ -34,7 +34,9 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError};
+use ccc_core::{
+    AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError, PluginLifecycle, PluginStatus,
+};
 use ccc_database::{CccDB, FederationFollower, PostStatus};
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::{RsaPrivateKey, RsaPublicKey};
@@ -209,11 +211,50 @@ struct AdminState {
 
 impl Plugin for CccPluginActivitypubPlugin {
     fn name(&self) -> &'static str {
-        "Federation (ActivityPub)"
+        "Federation"
     }
 
     fn version(&self) -> &'static str {
         "0.3.0"
+    }
+
+    fn id(&self) -> String {
+        "activitypub".into()
+    }
+    fn kind(&self) -> &'static str {
+        "ACTIVITYPUB"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-fed"
+    }
+
+    fn status(&self, ctx: &AppContext) -> PluginStatus {
+        let snap = self.settings.snapshot();
+        let followers = ctx.db.all_followers().unwrap_or_default();
+        let host_warning = snap.host.contains("example.com");
+        PluginStatus {
+            state: if snap.private_key_pem.is_empty() || host_warning {
+                PluginLifecycle::Unconfigured
+            } else {
+                PluginLifecycle::Configured
+            },
+            badge: None,
+            detail: serde_json::json!({
+                "configured": !snap.private_key_pem.is_empty() && !host_warning,
+                "actor": {
+                    "display_name": snap.display_name,
+                    "username": snap.username,
+                    "host": snap.host,
+                    "summary": snap.summary,
+                    "followers": followers.len(),
+                    "following": 0u64,
+                    "host_warning": if host_warning {
+                        Some(format!("Host is still set to {} — update before public launch.", snap.host))
+                    } else { None },
+                },
+                "inbox": Vec::<serde_json::Value>::new(),
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {

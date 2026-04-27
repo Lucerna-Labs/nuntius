@@ -20,7 +20,7 @@ use axum::{
     routing::get,
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use s3::creds::Credentials;
 use s3::{Bucket, Region};
 use serde::{Deserialize, Serialize};
@@ -201,11 +201,61 @@ impl CccPluginS3Plugin {
 
 impl Plugin for CccPluginS3Plugin {
     fn name(&self) -> &'static str {
-        "Object Storage (S3)"
+        "Object Storage"
     }
 
     fn version(&self) -> &'static str {
         "0.2.0"
+    }
+
+    fn id(&self) -> String {
+        "s3".into()
+    }
+    fn kind(&self) -> &'static str {
+        "STORAGE"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-storage"
+    }
+
+    fn status(&self, _ctx: &AppContext) -> PluginStatus {
+        let s = self.settings.snapshot();
+        let mut missing: Vec<&'static str> = Vec::new();
+        if s.bucket.is_empty() {
+            missing.push("bucket");
+        }
+        if s.region.is_empty() {
+            missing.push("region");
+        }
+        if s.endpoint.is_empty() {
+            missing.push("endpoint");
+        }
+        if s.access_key.is_empty() {
+            missing.push("access_key");
+        }
+        if s.secret_key.is_empty() {
+            missing.push("secret_key");
+        }
+        if s.public_url_base.is_empty() {
+            missing.push("public_url_base");
+        }
+        let configured = missing.is_empty();
+        PluginStatus {
+            state: if configured {
+                PluginLifecycle::Configured
+            } else {
+                PluginLifecycle::Unconfigured
+            },
+            badge: None,
+            detail: serde_json::json!({
+                "configured": configured,
+                "missing": missing,
+                "file": "s3.toml",
+                "bucket": s.bucket,
+                "region": s.region,
+                "endpoint": s.endpoint,
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {

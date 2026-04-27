@@ -19,7 +19,9 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError};
+use ccc_core::{
+    AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError, PluginLifecycle, PluginStatus,
+};
 use ccc_database::{CccDB, PostStatus, Subscriber};
 use lettre::message::{header::ContentType, Message};
 use lettre::transport::smtp::authentication::Credentials;
@@ -154,6 +156,50 @@ impl Plugin for CccPluginNewsletterPlugin {
 
     fn version(&self) -> &'static str {
         "0.2.0"
+    }
+
+    fn id(&self) -> String {
+        "newsletter".into()
+    }
+    fn kind(&self) -> &'static str {
+        "EMAIL"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-mail"
+    }
+
+    fn status(&self, ctx: &AppContext) -> PluginStatus {
+        let snap = self.settings.snapshot();
+        let mut missing: Vec<&'static str> = Vec::new();
+        if snap.host.is_empty() {
+            missing.push("SMTP host");
+        }
+        if snap.username.is_empty() {
+            missing.push("username");
+        }
+        if snap.password.is_empty() {
+            missing.push("password");
+        }
+        if snap.from_email.is_empty() {
+            missing.push("from_email");
+        }
+        let subs = ctx.db.all_subscribers().map(|v| v.len()).unwrap_or(0);
+        let configured = missing.is_empty();
+        PluginStatus {
+            state: if configured {
+                PluginLifecycle::Configured
+            } else {
+                PluginLifecycle::Unconfigured
+            },
+            badge: None,
+            detail: serde_json::json!({
+                "configured": configured,
+                "missing": missing,
+                "file": "newsletter.toml",
+                "auto_send_blog_posts": snap.auto_send_blog_posts,
+                "subscribers": subs,
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {

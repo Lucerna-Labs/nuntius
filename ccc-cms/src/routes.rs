@@ -8,31 +8,37 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Form, State},
+    extract::{Form, Path, State},
     http::StatusCode,
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Json, Redirect, Response},
     routing::get,
     Router,
 };
-use ccc_core::AdminNavEntry;
+use ccc_core::{AdminNavEntry, AppContext, PluginManager};
 use serde::Deserialize;
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::ServeDir;
 
 use crate::auth::AdminStore;
 use crate::middleware::{require_login, session_value, SESSION_COOKIE};
-use crate::templates::{DashboardPage, LoginPage, NavSection, SetupPage};
+use crate::templates::{DashboardPage, LoginPage, SetupPage};
 
 /// State assembled by the host and passed into the admin tree.
 ///
-/// Carries the auth store plus every plugin's contribution to the
-/// dashboard (nav entries, identifier list). Cheap to clone — internal
-/// data is `Arc`-shared.
+/// Carries the auth store, the plugin manager (so the admin shell can
+/// enumerate plugins and pull live status), and the app context the
+/// manager needs to call into individual plugins. Cheap to clone —
+/// internal data is `Arc`-shared.
 #[derive(Clone)]
 pub struct DashboardCtx {
     pub store: Arc<AdminStore>,
+    /// Legacy nav-entry list. The Nuntius shell does not use it (it
+    /// builds the rail from `/admin/api/plugins`), but we keep it for
+    /// templates that still reference it.
     pub nav: Vec<AdminNavEntry>,
     pub plugin_names: Vec<String>,
+    pub plugin_manager: Arc<PluginManager>,
+    pub app_ctx: AppContext,
 }
 
 /// Build the full `/admin` tree.
@@ -55,6 +61,8 @@ pub fn build_admin_tree(ctx: DashboardCtx, plugin_admin: Router) -> Router {
         .route("/login", get(login_get).post(login_post))
         .route("/logout", get(logout))
         .route("/", get(dashboard))
+        .route("/api/plugins", get(api_plugins))
+        .route("/api/plugins/:id/status", get(api_plugin_status))
         .with_state(ctx)
         .merge(plugin_admin)
         .nest_service("/static", ServeDir::new(static_dir))
@@ -183,23 +191,24 @@ async fn dashboard(State(ctx): State<DashboardCtx>) -> Response {
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    let nav: Vec<NavSection> = ctx
-        .nav
-        .iter()
-        .map(|e| NavSection {
-            label: e.label,
-            href: e.href.clone(),
-            icon: e.icon,
-        })
-        .collect();
-
     DashboardPage {
         admin_username: username,
-        plugin_count: ctx.plugin_names.len(),
-        plugin_names: ctx.plugin_names.clone(),
-        nav,
     }
     .into_response()
+}
+
+// ---------- API: /admin/api/plugins ----------
+
+async fn api_plugins(State(ctx): State<DashboardCtx>) -> Response {
+    let rows = ctx.plugin_manager.rail_rows(&ctx.app_ctx);
+    Json(rows).into_response()
+}
+
+async fn api_plugin_status(State(ctx): State<DashboardCtx>, Path(id): Path<String>) -> Response {
+    match ctx.plugin_manager.plugin_status(&ctx.app_ctx, &id) {
+        Some(status) => Json(status).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 // ---------- Helpers ----------

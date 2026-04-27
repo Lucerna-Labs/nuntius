@@ -17,7 +17,7 @@ use axum::{
     routing::get,
     Router,
 };
-use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError};
+use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
@@ -56,6 +56,12 @@ impl EventBuffer {
             .cloned()
             .collect()
     }
+    pub fn len(&self) -> usize {
+        self.events.read().map(|g| g.len()).unwrap_or(0)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 // ============================================================================
@@ -87,6 +93,31 @@ impl Plugin for CccPluginAnalyticsPlugin {
 
     fn version(&self) -> &'static str {
         "0.2.0"
+    }
+
+    fn id(&self) -> String {
+        "analytics".into()
+    }
+    fn kind(&self) -> &'static str {
+        "METRICS"
+    }
+    fn icon(&self) -> &'static str {
+        "icon-chart"
+    }
+
+    fn status(&self, _ctx: &AppContext) -> PluginStatus {
+        let len = self.buffer.len();
+        PluginStatus {
+            state: PluginLifecycle::Configured,
+            badge: None,
+            detail: serde_json::json!({
+                "configured": true,
+                "buffer_size": BUFFER_SIZE,
+                "events_in_ring": len,
+                "today": { "pageviews": len, "unique_visitors": 0u64, "top_referrer": "—" },
+                "this_week": { "pageviews": len, "listeners_total": 0u64 },
+            }),
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {

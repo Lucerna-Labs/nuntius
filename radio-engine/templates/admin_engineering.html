@@ -1,0 +1,295 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Engineering — Radio — Creator Command Center{% endblock %}
+
+{% block content %}
+{% include "_radio_tabs.html" %}
+
+<style>
+  .eng-page {
+    --panel: #14161b;
+    --panel-2: #1c1f26;
+    --rim: #2a2e36;
+    --rim-2: #404652;
+    --ink: #e7eaf0;
+    --ink-dim: #8c93a3;
+    --led-blue: #5b9eff;
+    --led-red: #ff2a2a;
+    color: var(--ink);
+  }
+  .cms-shell__main { background: linear-gradient(180deg, #0c0d10 0%, #0a0b0e 100%); }
+
+  .eng-page__head { margin-bottom: 18px; }
+  .eng-page__head h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: 0.02em; }
+  .eng-page__head p { margin: 0; color: var(--ink-dim); font-size: 13px; }
+
+  .eng-card {
+    background: linear-gradient(180deg, var(--panel) 0%, #101216 100%);
+    border: 1px solid var(--rim); border-radius: 8px;
+    padding: 22px 24px; margin-bottom: 18px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.5);
+  }
+  .eng-card h2 {
+    margin: 0 0 4px; font-size: 12px; font-weight: 700;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  .eng-card p.eng-card__lede { margin: 0 0 16px; font-size: 13px; color: var(--ink-dim); }
+
+  .eng-field { display: block; margin-bottom: 18px; }
+  .eng-field:last-child { margin-bottom: 0; }
+  .eng-field__label {
+    display: block; margin-bottom: 6px;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-dim);
+  }
+  .eng-field__hint { display: block; margin-top: 6px; font-size: 12px; color: var(--ink-dim); }
+  .eng-field__hint code { font-family: "Consolas", monospace; padding: 1px 4px; background: #0a0b0e; border-radius: 3px; }
+
+  .eng-input,
+  .eng-input-row input[type=text],
+  .eng-input-row input[type=password],
+  .eng-input-row input[type=url],
+  .eng-input-row input[type=number] {
+    width: 100%; max-width: 480px;
+    padding: 10px 12px; border-radius: 4px;
+    background: #0a0b0e; color: var(--ink);
+    border: 1px solid var(--rim);
+    font: 14px/1.4 inherit; font-variant-numeric: tabular-nums;
+    transition: border-color 120ms, box-shadow 120ms;
+  }
+  .eng-input:focus,
+  .eng-input-row input:focus {
+    outline: none; border-color: var(--led-blue);
+    box-shadow: 0 0 0 3px rgba(91,158,255,0.18);
+  }
+
+  /* Preset chip rows */
+  .eng-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .eng-chip {
+    padding: 8px 14px; border-radius: 4px; cursor: pointer;
+    background: linear-gradient(180deg, #1c1f26 0%, #14171d 100%);
+    border: 1px solid var(--rim); color: var(--ink);
+    font: 13px/1 inherit; font-weight: 600; letter-spacing: 0.02em;
+    transition: border-color 120ms, background 120ms, color 120ms, transform 60ms;
+    user-select: none;
+  }
+  .eng-chip:hover { border-color: var(--rim-2); }
+  .eng-chip:active { transform: translateY(1px); }
+  .eng-chip.is-on {
+    background: linear-gradient(180deg, #1a3863 0%, #112648 100%);
+    border-color: var(--led-blue); color: #e6f1ff;
+    box-shadow: 0 0 0 1px var(--led-blue), 0 0 12px rgba(91,158,255,0.25);
+  }
+  .eng-chip__sub { display: block; font-size: 10px; font-weight: 500; color: var(--ink-dim); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 3px; }
+  .eng-chip.is-on .eng-chip__sub { color: rgba(255,255,255,0.7); }
+
+  .eng-input-row { display: flex; align-items: center; gap: 10px; }
+  .eng-input-row label { font-size: 12px; color: var(--ink-dim); white-space: nowrap; }
+  .eng-input-row .unit { font-size: 12px; color: var(--ink-dim); }
+
+  .eng-toggle {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 12px; border-radius: 6px;
+    background: #0e1015; border: 1px solid var(--rim);
+  }
+  .eng-toggle input[type=checkbox] { margin-top: 3px; transform: scale(1.15); accent-color: var(--led-blue); }
+  .eng-toggle__title { font-weight: 700; font-size: 14px; }
+  .eng-toggle__sub { font-size: 12px; color: var(--ink-dim); margin-top: 3px; }
+
+  .eng-actions {
+    display: flex; gap: 10px; align-items: center;
+    padding-top: 16px; border-top: 1px solid var(--rim); margin-top: 18px;
+  }
+  .eng-btn {
+    padding: 11px 22px; border-radius: 4px;
+    background: linear-gradient(180deg, #2a4d8a, #1c3563);
+    color: white; border: 1px solid #345fab; font-weight: 700; font-size: 13px;
+    letter-spacing: 0.04em; cursor: pointer;
+  }
+  .eng-btn:hover { background: linear-gradient(180deg, #335ca8, #244478); }
+
+  .saved-flash {
+    margin-bottom: 18px; padding: 10px 14px; border-radius: 4px;
+    background: rgba(41, 224, 122, 0.08);
+    border: 1px solid rgba(41, 224, 122, 0.4);
+    color: #b6f3cf; font-size: 13px;
+  }
+</style>
+
+<div class="eng-page">
+  <header class="eng-page__head">
+    <h1>Engineering</h1>
+    <p>Mount, encoder, relay, and AutoDJ knobs. Presets cover common cases — type a custom value if a preset doesn't fit.</p>
+  </header>
+
+  {% if saved %}
+    <div class="saved-flash">Settings saved.</div>
+  {% endif %}
+
+  <form method="post" action="/admin/radio">
+
+    <section class="eng-card">
+      <h2>Mount &amp; security</h2>
+      <p class="eng-card__lede">What listeners hit and what your streaming software signs in with.</p>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Source password</span>
+        <input class="eng-input" type="password" name="source_password" value="{{ source_password }}" required autocomplete="new-password">
+        <span class="eng-field__hint">Username is always <code>source</code>. Configure your streaming software with this password.</span>
+      </label>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Mount point</span>
+        <input class="eng-input" type="text" name="mount_path" value="{{ mount_path }}" required pattern="/.+">
+        <span class="eng-field__hint">Begins with <code>/</code>. Listeners hit <code>http://your-host:{{ port }}{{ mount_path }}</code></span>
+      </label>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Stream name (icy-name)</span>
+        <input class="eng-input" type="text" name="stream_name" value="{{ stream_name }}">
+        <span class="eng-field__hint">Shown by streaming software / players that read ICY headers.</span>
+      </label>
+    </section>
+
+    <section class="eng-card">
+      <h2>Content type</h2>
+      <p class="eng-card__lede">The MIME type listeners receive. Pick a preset or type a custom value.</p>
+
+      <div class="eng-presets" data-preset-group="content_type">
+        <button type="button" class="eng-chip" data-value="audio/mpeg">MP3<span class="eng-chip__sub">audio/mpeg</span></button>
+        <button type="button" class="eng-chip" data-value="application/ogg">Ogg / Opus<span class="eng-chip__sub">application/ogg</span></button>
+        <button type="button" class="eng-chip" data-value="audio/aac">AAC<span class="eng-chip__sub">audio/aac</span></button>
+        <button type="button" class="eng-chip" data-value="audio/flac">FLAC<span class="eng-chip__sub">audio/flac</span></button>
+      </div>
+
+      <div class="eng-input-row">
+        <label for="contentTypeInput">Custom:</label>
+        <input id="contentTypeInput" class="eng-input" type="text" name="content_type" value="{{ content_type }}" required style="max-width:280px;">
+      </div>
+      <span class="eng-field__hint">Match this to whatever your streaming software actually emits, or to the codec the AutoDJ encoder produces.</span>
+    </section>
+
+    <section class="eng-card">
+      <h2>Relay (optional)</h2>
+      <p class="eng-card__lede">Pull bytes from another Icecast/SHOUTcast server and rebroadcast.</p>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Upstream relay URL</span>
+        <input class="eng-input" type="url" name="relay_url" value="{{ relay_url }}" placeholder="http://upstream.example.com:8000/stream">
+        <span class="eng-field__hint">Live source connections override it; clear the field to disable.</span>
+      </label>
+    </section>
+
+    <section class="eng-card">
+      <h2>AutoDJ encoder</h2>
+      <p class="eng-card__lede">Output bitrate when re-encoding library tracks. Higher = better quality, more bandwidth per listener. Requires <code>ffmpeg</code>.</p>
+
+      <span class="eng-field__label">Bitrate preset</span>
+      <div class="eng-presets" data-preset-group="bitrate">
+        <button type="button" class="eng-chip" data-value="64">64 kbps<span class="eng-chip__sub">talk / low</span></button>
+        <button type="button" class="eng-chip" data-value="96">96 kbps<span class="eng-chip__sub">economy</span></button>
+        <button type="button" class="eng-chip" data-value="128">128 kbps<span class="eng-chip__sub">standard</span></button>
+        <button type="button" class="eng-chip" data-value="192">192 kbps<span class="eng-chip__sub">good</span></button>
+        <button type="button" class="eng-chip" data-value="256">256 kbps<span class="eng-chip__sub">great</span></button>
+        <button type="button" class="eng-chip" data-value="320">320 kbps<span class="eng-chip__sub">max</span></button>
+      </div>
+
+      <div class="eng-input-row">
+        <label for="bitrateInput">Custom:</label>
+        <input id="bitrateInput" class="eng-input" type="number" name="station_bitrate_kbps" value="{{ station_bitrate_kbps }}" min="32" max="320" step="8" required style="max-width:140px;">
+        <span class="unit">kbps</span>
+      </div>
+    </section>
+
+    <section class="eng-card">
+      <h2>Loudness</h2>
+      <label class="eng-toggle">
+        <input type="checkbox" name="apply_loudness_normalization" value="1" {% if apply_loudness_normalization %}checked{% endif %}>
+        <span>
+          <span class="eng-toggle__title">Apply EBU R128 loudness normalization</span>
+          <span class="eng-toggle__sub">Each track is measured at upload (target −23 LUFS) and adjusted at playback so the station volume stays consistent across uploads.</span>
+        </span>
+      </label>
+    </section>
+
+    <section class="eng-card">
+      <h2>Crossfade</h2>
+      <p class="eng-card__lede">Overlap between tracks. With any value above 0, the engine runs a true PCM mixer with equal-power weights across the boundary.</p>
+
+      <span class="eng-field__label">Crossfade preset</span>
+      <div class="eng-presets" data-preset-group="crossfade">
+        <button type="button" class="eng-chip" data-value="0">0 s<span class="eng-chip__sub">hard cut</span></button>
+        <button type="button" class="eng-chip" data-value="2">2 s<span class="eng-chip__sub">gentle</span></button>
+        <button type="button" class="eng-chip" data-value="4">4 s<span class="eng-chip__sub">smooth</span></button>
+        <button type="button" class="eng-chip" data-value="6">6 s<span class="eng-chip__sub">radio</span></button>
+        <button type="button" class="eng-chip" data-value="10">10 s<span class="eng-chip__sub">long blend</span></button>
+      </div>
+
+      <div class="eng-input-row">
+        <label for="crossfadeInput">Custom:</label>
+        <input id="crossfadeInput" class="eng-input" type="number" name="crossfade_seconds" value="{{ crossfade_seconds }}" min="0" max="10" required style="max-width:120px;">
+        <span class="unit">seconds</span>
+      </div>
+    </section>
+
+    <div class="eng-actions">
+      <button class="eng-btn" type="submit">Save settings</button>
+      <span style="font-size:12px; color: var(--ink-dim);">Changes apply on next AutoDJ pass.</span>
+    </div>
+  </form>
+</div>
+
+<script>
+(function() {
+  // For each preset group, sync chip "is-on" state with the bound input.
+  const groups = [
+    { name: 'content_type', input: document.getElementById('contentTypeInput'), match: (chipVal, inputVal) => chipVal === inputVal },
+    { name: 'bitrate',      input: document.getElementById('bitrateInput'),     match: (chipVal, inputVal) => Number(chipVal) === Number(inputVal) },
+    { name: 'crossfade',    input: document.getElementById('crossfadeInput'),   match: (chipVal, inputVal) => Number(chipVal) === Number(inputVal) },
+  ];
+  groups.forEach(g => {
+    const wrap = document.querySelector('[data-preset-group="' + g.name + '"]');
+    if (!wrap || !g.input) return;
+    const chips = Array.from(wrap.querySelectorAll('.eng-chip'));
+    function refresh() {
+      chips.forEach(c => c.classList.toggle('is-on', g.match(c.dataset.value, g.input.value)));
+    }
+    chips.forEach(c => c.addEventListener('click', () => {
+      g.input.value = c.dataset.value;
+      g.input.dispatchEvent(new Event('input', { bubbles: true }));
+      refresh();
+    }));
+    g.input.addEventListener('input', refresh);
+    refresh();
+  });
+})();
+</script>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Streaming software</h3>
+  <ul class="cms-rail__list">
+    <li>Server: this host</li>
+    <li>Port: <code>{{ port }}</code></li>
+    <li>Mount: <code>{{ mount_path }}</code></li>
+    <li>User: <code>source</code></li>
+    <li>Password: above</li>
+    <li>Format: matches Content type</li>
+  </ul>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Bitrate guide</h3>
+  <p style="font-size:13px; line-height:1.5; margin:0;">
+    96 kbps is fine for talk / podcasting. <strong>128 kbps</strong> is the long-standing music radio default.
+    192–256 kbps sounds noticeably better; 320 maxes out MP3.
+  </p>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Crossfade guide</h3>
+  <p style="font-size:13px; line-height:1.5; margin:0;">
+    0 = hard cuts (good for talk content). 2 s is the sweet spot for shuffled music libraries.
+    5+ gives an overlapping radio-DJ feel. 10 is the cap.
+  </p>
+</div>
+{% endblock %}

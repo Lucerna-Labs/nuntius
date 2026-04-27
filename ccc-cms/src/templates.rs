@@ -6,14 +6,6 @@
 
 use askama::Template;
 
-/// Sidebar navigation entry. Plugins contribute these via the dashboard
-/// (TODO: wire plugin contribution later).
-pub struct NavSection {
-    pub label: &'static str,
-    pub href: String,
-    pub icon: &'static str,
-}
-
 /// First-run setup wizard.
 #[derive(Template)]
 #[template(path = "setup.html")]
@@ -29,12 +21,11 @@ pub struct LoginPage<'a> {
     pub username: &'a str,
 }
 
-/// Authenticated dashboard landing page.
+/// Authenticated Nuntius admin shell. Renders the SPA chrome; all
+/// plugin data hydrates client-side from `/admin/api/plugins` and
+/// `/admin/api/plugins/:id/status`.
 #[derive(Template)]
 #[template(path = "dashboard.html")]
 pub struct DashboardPage {
     pub admin_username: String,
-    pub nav: Vec<NavSection>,
-    pub plugin_count: usize,
-    pub plugin_names: Vec<String>,
 }
