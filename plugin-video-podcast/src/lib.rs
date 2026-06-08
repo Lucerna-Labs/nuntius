@@ -1,6 +1,7 @@
 //! Video podcast plugin: upload + ffmpeg HLS transcode + browser playback.
 //!
 //! Public:
+//! - GET /videos               HTML index for published on-demand video
 //! - GET /videos/:slug         HTML page with HLS.js player
 //! - GET /videos/hls/<dir>/*   ServeDir over the HLS output tree
 //!
@@ -26,6 +27,7 @@ use ccc_database::{CccDB, VideoPodcast, VideoStatus};
 use serde::Deserialize;
 use std::any::Any;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
@@ -89,6 +91,10 @@ struct AppState {
     hls_dir: Arc<PathBuf>,
     source_dir: Arc<PathBuf>,
     ffmpeg: Arc<String>,
+    /// One-shot guard for the background transcode worker. Replaces
+    /// the old `static SPAWNED: AtomicBool` pattern that didn't work
+    /// if you ever constructed two plugin instances (tests, hot-reload).
+    transcode_worker_spawned: Arc<AtomicBool>,
 }
 
 impl Plugin for VideoPodcastPlugin {
@@ -108,6 +114,9 @@ impl Plugin for VideoPodcastPlugin {
     }
     fn icon(&self) -> &'static str {
         "icon-video"
+    }
+    fn admin_url(&self) -> String {
+        "/admin/videos".into()
     }
 
     fn status(&self, _ctx: &AppContext) -> PluginStatus {
@@ -129,7 +138,7 @@ impl Plugin for VideoPodcastPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         let _ = std::fs::create_dir_all(&self.hls_base_path);
         let _ = std::fs::create_dir_all(&self.source_dir);
         let avail = ffmpeg_available(&self.ffmpeg);
@@ -152,9 +161,11 @@ impl Plugin for VideoPodcastPlugin {
             hls_dir: Arc::new(PathBuf::from(&self.hls_base_path)),
             source_dir: Arc::new(self.source_dir.clone()),
             ffmpeg: Arc::new(self.ffmpeg.clone()),
+            transcode_worker_spawned: Arc::new(AtomicBool::new(false)),
         };
         Some(
             Router::new()
+                .route("/videos", get(public_index))
                 .route("/videos/:slug", get(public_show))
                 .nest_service(
                     "/videos/hls",
@@ -171,6 +182,7 @@ impl Plugin for VideoPodcastPlugin {
             hls_dir: Arc::new(PathBuf::from(&self.hls_base_path)),
             source_dir: Arc::new(self.source_dir.clone()),
             ffmpeg: Arc::new(self.ffmpeg.clone()),
+            transcode_worker_spawned: Arc::new(AtomicBool::new(false)),
         };
         spawn_transcode_worker(state.clone());
         Some(
@@ -215,9 +227,10 @@ fn ffmpeg_available(name: &str) -> bool {
 }
 
 fn spawn_transcode_worker(state: AppState) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static SPAWNED: AtomicBool = AtomicBool::new(false);
-    if SPAWNED.swap(true, Ordering::SeqCst) {
+    // Per-plugin one-shot guard. Replaces the old `static SPAWNED`
+    // pattern that didn't work if you ever constructed two plugin
+    // instances (tests, hot-reload, multi-tenant).
+    if state.transcode_worker_spawned.swap(true, Ordering::SeqCst) {
         return;
     }
     tokio::spawn(async move {
@@ -265,8 +278,11 @@ async fn transcode_one(state: &AppState, mut video: VideoPodcast) {
     //   <hls_dir>/master.m3u8 (referencing all four)
     // Doing it in one process is faster and saves a re-decode per rung.
     let mut args: Vec<String> = vec!["-y".into(), "-i".into(), video.source_path.clone()];
-    // Per-variant codec settings.
-    for (_h, vbr, abr) in VARIANTS {
+    // Per-variant codec settings. Use stream specifiers (`:N`) on `-b:v` /
+    // `-b:a` so each output gets its OWN bitrate; without the specifier,
+    // ffmpeg applies the last value to all four variants and 240p ends up
+    // encoded at 2800kbps.
+    for (i, (_h, vbr, abr)) in VARIANTS.iter().enumerate() {
         args.extend([
             "-c:v".into(),
             "libx264".into(),
@@ -274,9 +290,9 @@ async fn transcode_one(state: &AppState, mut video: VideoPodcast) {
             "veryfast".into(),
             "-c:a".into(),
             "aac".into(),
-            "-b:v".into(),
+            format!("-b:v:{}", i),
             (*vbr).to_string(),
-            "-b:a".into(),
+            format!("-b:a:{}", i),
             (*abr).to_string(),
         ]);
     }
@@ -357,6 +373,57 @@ fn finish_failed(state: &AppState, mut video: VideoPodcast, err: String) {
 // ============================================================================
 // Public handlers
 // ============================================================================
+
+#[derive(Template)]
+#[template(path = "public_index.html")]
+struct PublicIndexPage {
+    videos: Vec<PublicVideoRow>,
+    upcoming: Vec<PublicVideoRow>,
+}
+
+struct PublicVideoRow {
+    title: String,
+    slug: String,
+    description: String,
+    duration: String,
+    published_human: String,
+    status: &'static str,
+}
+
+async fn public_index(State(state): State<AppState>) -> Response {
+    let published = match state.db.latest_published_video_podcasts(100) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let videos = published.into_iter().map(public_video_row).collect();
+
+    let all = match state.db.all_video_podcasts() {
+        Ok(v) => v,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let upcoming = all
+        .into_iter()
+        .filter(|v| v.status == VideoStatus::Draft || v.status == VideoStatus::Transcoding)
+        .take(6)
+        .map(public_video_row)
+        .collect();
+
+    render(PublicIndexPage { videos, upcoming })
+}
+
+fn public_video_row(v: VideoPodcast) -> PublicVideoRow {
+    PublicVideoRow {
+        title: v.title,
+        slug: v.slug,
+        description: v.description,
+        duration: format_seconds(v.duration_seconds),
+        published_human: v
+            .published_at
+            .map(format_unix)
+            .unwrap_or_else(|| "Coming soon".into()),
+        status: v.status.as_str(),
+    }
+}
 
 async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
     let v = match state.db.get_video_podcast_by_slug(&slug) {
@@ -521,9 +588,13 @@ async fn admin_create(State(state): State<AppState>, mut multipart: Multipart) -
         return new_form_error("The video file was empty.");
     }
 
-    let hls_dir_name = format!("{}-{}", now, slug);
+    let video_id = match state.db.next_id("video_podcast") {
+        Ok(id) => id,
+        Err(e) => return new_form_error(&format!("Could not allocate video id: {e}")),
+    };
+    let hls_dir_name = format!("{}-{}", video_id, slug);
     let video = VideoPodcast {
-        id: now,
+        id: video_id,
         slug,
         title,
         description,
@@ -715,6 +786,17 @@ fn unix_now() -> u64 {
 fn format_unix(ts: u64) -> String {
     let (y, mo, d, h, mi) = unix_to_ymdhm(ts);
     format!("{:04}-{:02}-{:02} {:02}:{:02}", y, mo, d, h, mi)
+}
+
+fn format_seconds(s: u64) -> String {
+    let h = s / 3600;
+    let m = (s % 3600) / 60;
+    let sec = s % 60;
+    if h > 0 {
+        format!("{:02}:{:02}:{:02}", h, m, sec)
+    } else {
+        format!("{:02}:{:02}", m, sec)
+    }
 }
 
 fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {

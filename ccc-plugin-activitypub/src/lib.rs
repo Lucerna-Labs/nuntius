@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn generate_keypair_pem() -> Result<(String, String), String> {
@@ -85,7 +85,7 @@ pub struct FederationSettings {
 impl Default for FederationSettings {
     fn default() -> Self {
         Self {
-            display_name: "Creator Command Center".to_string(),
+            display_name: "Nuntius".to_string(),
             username: "station".to_string(),
             host: "ccc.example.com".to_string(),
             summary: "The official broadcast feed.".to_string(),
@@ -178,6 +178,10 @@ fn io_err(e: std::io::Error) -> PluginError {
 
 pub struct CccPluginActivitypubPlugin {
     settings: Arc<SettingsStore>,
+    /// One-shot guard for the publish-listener background task.
+    /// Replaces the old `static SPAWNED: AtomicBool` pattern that
+    /// didn't work if you ever constructed two plugin instances.
+    publish_listener_spawned: AtomicBool,
 }
 
 impl CccPluginActivitypubPlugin {
@@ -193,6 +197,7 @@ impl CccPluginActivitypubPlugin {
         let store = SettingsStore::load_or_init(&path)?;
         Ok(Self {
             settings: Arc::new(store),
+            publish_listener_spawned: AtomicBool::new(false),
         })
     }
 }
@@ -227,6 +232,9 @@ impl Plugin for CccPluginActivitypubPlugin {
     fn icon(&self) -> &'static str {
         "icon-fed"
     }
+    fn admin_url(&self) -> String {
+        "/admin/federation".into()
+    }
 
     fn status(&self, ctx: &AppContext) -> PluginStatus {
         let snap = self.settings.snapshot();
@@ -257,7 +265,7 @@ impl Plugin for CccPluginActivitypubPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         let snap = self.settings.snapshot();
         println!(
             "Initializing Federation: handle=@{}@{} (RSA keypair {})",
@@ -294,7 +302,12 @@ impl Plugin for CccPluginActivitypubPlugin {
         };
         // Subscribe to publish events (blog/podcast) and fan out
         // Create Note activities to followers.
-        spawn_publish_listener(self.settings.clone(), ctx.db.clone(), ctx.events.clone());
+        spawn_publish_listener(
+            self.settings.clone(),
+            ctx.db.clone(),
+            ctx.events.clone(),
+            &self.publish_listener_spawned,
+        );
         Some(
             Router::new()
                 .route("/federation", get(admin_get).post(admin_post))
@@ -703,10 +716,16 @@ fn unix_now() -> u64 {
 
 /// Subscribe to BlogPost / Podcast publish events; on each, fan out a
 /// Create Note activity to every follower's inbox.
-fn spawn_publish_listener(settings: Arc<SettingsStore>, db: Arc<CccDB>, events: Arc<EventBus>) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static SPAWNED: AtomicBool = AtomicBool::new(false);
-    if SPAWNED.swap(true, Ordering::SeqCst) {
+fn spawn_publish_listener(
+    settings: Arc<SettingsStore>,
+    db: Arc<CccDB>,
+    events: Arc<EventBus>,
+    spawned: &AtomicBool,
+) {
+    // Per-plugin one-shot guard. Replaces the global `static SPAWNED`
+    // pattern that would prevent two plugin instances from each
+    // subscribing (a real concern for tests and hot-reload).
+    if spawned.swap(true, Ordering::SeqCst) {
         return;
     }
     let mut rx = events.subscribe();

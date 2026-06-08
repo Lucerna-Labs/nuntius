@@ -49,7 +49,7 @@ impl Plugin for DropPlugin {
         "0.1.0"
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         println!("Initializing CCC Drop (WebRTC P2P File Transfer)...");
         Ok(())
     }

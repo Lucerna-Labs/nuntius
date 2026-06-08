@@ -63,7 +63,7 @@ impl Plugin for CccPluginAdsPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         println!("Initializing Ads (creative store + /api/ads/next).");
         Ok(())
     }

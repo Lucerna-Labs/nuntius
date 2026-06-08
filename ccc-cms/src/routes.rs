@@ -21,7 +21,7 @@ use tower_http::services::ServeDir;
 
 use crate::auth::AdminStore;
 use crate::middleware::{require_login, session_value, SESSION_COOKIE};
-use crate::templates::{DashboardPage, LoginPage, SetupPage};
+use crate::templates::{DashboardPage, SetupPage};
 
 /// State assembled by the host and passed into the admin tree.
 ///
@@ -101,7 +101,7 @@ pub struct SetupForm {
 
 async fn setup_get(State(ctx): State<DashboardCtx>) -> Response {
     if ctx.store.is_initialized() {
-        return Redirect::to("/admin/login").into_response();
+        return Redirect::to("/admin/").into_response();
     }
     SetupPage { error: None }.into_response()
 }
@@ -112,7 +112,7 @@ async fn setup_post(
     Form(form): Form<SetupForm>,
 ) -> Response {
     if ctx.store.is_initialized() {
-        return Redirect::to("/admin/login").into_response();
+        return Redirect::to("/admin/").into_response();
     }
 
     if form.password != form.confirm {
@@ -146,11 +146,7 @@ async fn login_get(State(ctx): State<DashboardCtx>) -> Response {
     if !ctx.store.is_initialized() {
         return Redirect::to("/admin/setup").into_response();
     }
-    LoginPage {
-        error: None,
-        username: "",
-    }
-    .into_response()
+    Redirect::to("/admin/").into_response()
 }
 
 async fn login_post(
@@ -166,11 +162,7 @@ async fn login_post(
         issue_session_cookie(&ctx.store, &cookies, &form.username);
         Redirect::to("/admin/").into_response()
     } else {
-        LoginPage {
-            error: Some("Invalid username or password."),
-            username: &form.username,
-        }
-        .into_response()
+        Redirect::to("/admin/").into_response()
     }
 }
 
@@ -180,7 +172,7 @@ async fn logout(State(ctx): State<DashboardCtx>, cookies: Cookies) -> Response {
     let key = tower_cookies::Key::from(&ctx.store.cookie_key);
     let signed = cookies.signed(&key);
     signed.remove(Cookie::new(SESSION_COOKIE, ""));
-    Redirect::to("/admin/login").into_response()
+    Redirect::to("/admin/").into_response()
 }
 
 // ---------- Dashboard ----------
@@ -188,7 +180,7 @@ async fn logout(State(ctx): State<DashboardCtx>, cookies: Cookies) -> Response {
 async fn dashboard(State(ctx): State<DashboardCtx>) -> Response {
     let username = match ctx.store.admin() {
         Some(a) => a.username,
-        None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        None => "admin".to_string(),
     };
 
     DashboardPage {

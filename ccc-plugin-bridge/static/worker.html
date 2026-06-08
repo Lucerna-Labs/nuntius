@@ -1,0 +1,70 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nuntius Bridge Worker</title><style>body{margin:0;background:#11151b;color:#e8edf2;font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:940px;margin:0 auto;padding:32px 20px}
+header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:24px}
+h1{margin:0;font-size:28px;letter-spacing:0}.lede{margin:8px 0 0;color:#9aa7b5;max-width:640px}
+.actions{display:flex;gap:10px;flex-wrap:wrap}button,a.btn{border:1px solid #2e3b49;background:#1d2630;color:#e8edf2;border-radius:6px;padding:10px 14px;text-decoration:none;cursor:pointer}
+button.primary{background:#54d6c6;color:#071011;border-color:#54d6c6;font-weight:700}button:disabled{opacity:.55;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:22px 0}
+.card{border:1px solid #25313d;background:#151b22;border-radius:8px;padding:14px;min-height:72px}
+.label{color:#7f8d9c;font-size:11px;text-transform:uppercase;letter-spacing:.08em}.value{font-size:20px;margin-top:7px;word-break:break-word}
+.panel{border:1px solid #25313d;background:#151b22;border-radius:8px;padding:16px;margin-top:16px}
+textarea,input{width:100%;box-sizing:border-box;border:1px solid #2e3b49;background:#0d1117;color:#e8edf2;border-radius:6px;padding:10px;font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{min-height:260px;max-height:420px;overflow:auto;margin:0;white-space:pre-wrap;color:#b8c5d1;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+.ok{color:#54d6c6}.warn{color:#f4c35a}.bad{color:#ff7979}
+@media (max-width:760px){header{display:block}.actions{margin-top:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}</style></head><body><main>
+<header><div><h1>Bridge worker</h1><p class="lede">Advertises this browser as a short-lived WebRTC bridge. The rendezvous broker only sees SDP and ICE; data-channel frames stay peer-to-peer.</p></div><div class="actions"><a class="btn" href="/admin/bridge">Admin</a><a class="btn" href="/bridge/client">Open client</a><button id="startBtn" class="primary">Start bridge</button></div></header>
+<section class="grid"><div class="card"><div class="label">Bridge ID</div><div id="bridgeId" class="value">-</div></div><div class="card"><div class="label">Session</div><div id="sessionId" class="value">-</div></div><div class="card"><div class="label">Peer</div><div id="peerState" class="value">idle</div></div><div class="card"><div class="label">Data channel</div><div id="channelState" class="value">closed</div></div></section>
+<section class="panel"><pre id="log"></pre></section>
+</main><script>
+const $=id=>document.getElementById(id);
+const logLine=(m,c='')=>{const el=$('log'); const t=new Date().toLocaleTimeString(); el.innerHTML+=`<span class="${c}">[${t}] ${m}</span>\n`; el.scrollTop=el.scrollHeight;};
+const api=async(path,opts={})=>{const r=await fetch(path,{...opts,headers:{'content-type':'application/json',...(opts.headers||{})}}); if(!r.ok) throw new Error(`${path} ${r.status}`); if(r.status===204) return null; return r.json();};
+let bridgeId=null, sessionId=null, pc=null, dc=null, clientIceNext=0, pollTimer=null, iceTimer=null, refreshTimer=null;
+function setText(id,v){$(id).textContent=v||'-';}
+function pcConfig(){return {iceServers:[]};}
+function requireWebRtc(){ if(typeof RTCPeerConnection!=='function') throw new Error('WebRTC RTCPeerConnection is not available in this browser'); }
+async function start(){
+  requireWebRtc();
+  $('startBtn').disabled=true;
+  const ad=await api('/api/bridge/advertise',{method:'POST',body:JSON.stringify({transport:'webrtc-datachannel',capacity:1,ttl_secs:300})});
+  bridgeId=ad.bridge_id; setText('bridgeId',bridgeId); logLine(`advertised ${bridgeId}`,'ok');
+  refreshTimer=setInterval(()=>api('/api/bridge/advertise',{method:'POST',body:JSON.stringify({bridge_id:bridgeId,transport:'webrtc-datachannel',capacity:1,ttl_secs:300})}).catch(e=>logLine(e.message,'bad')),60000);
+  pollTimer=setInterval(pollSessions,1000);
+}
+async function pollSessions(){
+  if(!bridgeId || pc) return;
+  const pending=await api(`/api/bridge/bridges/${encodeURIComponent(bridgeId)}/sessions`);
+  if(!pending.length) return;
+  await acceptSession(pending[0]);
+}
+async function acceptSession(s){
+  sessionId=s.session_id; setText('sessionId',sessionId); logLine(`accepting session ${sessionId}`,'ok');
+  pc=new RTCPeerConnection(pcConfig());
+  pc.onconnectionstatechange=()=>setText('peerState',pc.connectionState);
+  pc.onicecandidate=e=>{if(e.candidate) api(`/api/bridge/sessions/${sessionId}/bridge-ice`,{method:'POST',body:JSON.stringify({candidate:e.candidate.toJSON()})}).catch(err=>logLine(err.message,'bad'));};
+  pc.ondatachannel=e=>{dc=e.channel; wireChannel(dc);};
+  await pc.setRemoteDescription({type:s.offer.sdp_type,sdp:s.offer.sdp});
+  for(const c of (s.client_ice||[])) await pc.addIceCandidate(c).catch(()=>{});
+  const answer=await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  await api(`/api/bridge/sessions/${sessionId}/answer`,{method:'POST',body:JSON.stringify({answer:{sdp_type:answer.type,sdp:answer.sdp}})});
+  iceTimer=setInterval(pollClientIce,800);
+}
+async function pollClientIce(){
+  if(!pc || !sessionId) return;
+  const res=await api(`/api/bridge/sessions/${sessionId}/client-ice?from=${clientIceNext}`);
+  clientIceNext=res.next;
+  for(const c of res.candidates) await pc.addIceCandidate(c).catch(()=>{});
+}
+function wireChannel(ch){
+  setText('channelState',ch.readyState);
+  ch.onopen=()=>{setText('channelState','open'); logLine('data channel open','ok');};
+  ch.onclose=()=>{setText('channelState','closed'); logLine('data channel closed','warn'); pc=null; dc=null; sessionId=null; setText('sessionId','-');};
+  ch.onmessage=e=>{
+    let msg; try{msg=JSON.parse(e.data)}catch{logLine('non-json frame received','warn'); return;}
+    if(msg.type==='ciphertext'){ logLine(`opaque frame ${msg.id} received (${String(msg.bytes||'').length} chars)`); ch.send(JSON.stringify({type:'ciphertext-echo',id:msg.id,bytes:msg.bytes})); }
+    else if(msg.type==='ping'){ ch.send(JSON.stringify({type:'pong',at:Date.now()})); }
+  };
+}
+$('startBtn').addEventListener('click',()=>start().catch(e=>{logLine(e.message,'bad'); $('startBtn').disabled=false;}));
+</script></body></html>

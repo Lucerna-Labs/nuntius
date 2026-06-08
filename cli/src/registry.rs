@@ -56,12 +56,11 @@ pub fn register_by_name(
         "analytics" => {
             manager.register(ccc_plugin_analytics::CccPluginAnalyticsPlugin::new())?;
         }
+        "bridge" => {
+            manager.register(ccc_plugin_bridge::BridgePlugin::default())?;
+        }
         "newsletter" => {
             let plugin = ccc_plugin_newsletter::CccPluginNewsletterPlugin::from_config(cfg)?;
-            manager.register(plugin)?;
-        }
-        "patreon" => {
-            let plugin = ccc_plugin_patreon::CccPluginPatreonPlugin::from_config(cfg)?;
             manager.register(plugin)?;
         }
         "s3" => {
@@ -98,8 +97,8 @@ pub fn known_plugins() -> &'static [&'static str] {
         "activitypub",
         "ads",
         "analytics",
+        "bridge",
         "newsletter",
-        "patreon",
         "s3",
         "seo",
         "theme-dark-matter",

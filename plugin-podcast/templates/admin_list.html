@@ -1,6 +1,6 @@
 {% extends "_admin_layout.html" %}
 
-{% block title %}Episodes — Podcast — Creator Command Center{% endblock %}
+{% block title %}Episodes — Podcast — Nuntius{% endblock %}
 
 {% block content %}
 <header class="cms-page__header">
@@ -16,7 +16,7 @@
 {% endmatch %}
 
 {% if episodes.is_empty() %}
-  <p>No episodes yet. Upload one to get a real RSS feed at <code>/podcasts/feed.xml</code>.</p>
+  <p>No episodes yet. Upload one to get a public podcast page at <code>/podcasts</code> and a real RSS feed at <code>/podcasts/feed.xml</code>.</p>
 {% else %}
 <table class="cms-table">
   <thead>
@@ -47,9 +47,10 @@
 <div class="cms-rail__card">
   <h3>Public endpoints</h3>
   <ul class="cms-rail__list">
+    <li><a href="/podcasts">Podcast page</a> (published on-demand episodes)</li>
     <li><a href="/podcasts/feed.xml">RSS feed</a> (published, non-members-only)</li>
-    <li><code>/podcasts/:slug</code> — episode page</li>
-    <li><code>/podcasts/download/:id</code> — audio stream</li>
+    <li><code>/podcasts/:slug</code> - episode page</li>
+    <li><code>/podcasts/download/:id</code> - audio stream</li>
   </ul>
 </div>
 <div class="cms-rail__card" style="margin-top:24px">

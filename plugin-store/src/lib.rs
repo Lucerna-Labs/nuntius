@@ -64,7 +64,7 @@ impl Plugin for PluginStorePlugin {
         "0.3.0"
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         println!("Initializing 4C Plugin Store API...");
         Ok(())
     }
@@ -182,16 +182,6 @@ async fn list_available_plugins() -> impl IntoResponse {
         },
 
         // --- Community Plugins ---
-        StorePlugin {
-            id: "com.community.monetization-patreon".to_string(),
-            name: "Patreon Integration".to_string(),
-            description: "Sync Patreon tiers to unlock premium ad-free streams and content for subscribers.".to_string(),
-            author: "CreatorCommunity".to_string(),
-            category: PluginCategory::Community,
-            version: "0.9.5".to_string(),
-            is_installed: false,
-            download_url: Some("https://github.com/CreatorCommunity/ccc-patreon/releases/download/v0.9.5/plugin.wasm".to_string()),
-        },
         StorePlugin {
             id: "com.community.monetization-ads".to_string(),
             name: "Ad Insertion Manager".to_string(),

@@ -42,6 +42,14 @@ const ADS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("ads");
 const FEDERATION_FOLLOWERS_TABLE: TableDefinition<&str, &[u8]> =
     TableDefinition::new("federation_followers");
 
+/// Monotonic per-name counters. Plugins use these to assign primary keys
+/// (podcast episode id, video id, transcription job id) instead of
+/// `SystemTime::as_secs()`, which is wall-clock based and can collide when
+/// two writes land in the same second.
+/// Key: Counter name (e.g. "podcast_episode")
+/// Value: Next id to hand out (u64; first allocation is 1)
+const COUNTERS_TABLE: TableDefinition<&str, u64> = TableDefinition::new("counters");
+
 /// Radio playlists.
 /// Key: Playlist ID (u64)
 /// Value: Serialized `Playlist`
@@ -83,6 +91,27 @@ const VIDEO_PODCASTS_CHRONO_INDEX: TableDefinition<&str, u64> =
 
 const VIDEO_PODCASTS_SLUG_INDEX: TableDefinition<&str, u64> =
     TableDefinition::new("video_podcasts_slug_index");
+
+// ----------------------------------------------------------------------------
+// bincode helpers
+//
+// `bincode::serialize`/`deserialize` return `Result`, but the entire database
+// layer used to `.unwrap()` them. A single corrupted row, a partial write from
+// a crashed save, or a future schema mismatch then panicked the axum worker
+// thread (a panic on `Result::unwrap()` in a worker becomes a `JoinError` and
+// the request just hangs). The helpers below map both directions to
+// `redb::Error::Corrupted` so a bad row is a clean error response, not a
+// crash. Use these everywhere instead of calling bincode directly.
+// ----------------------------------------------------------------------------
+
+fn decode<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T, Error> {
+    bincode::deserialize(raw)
+        .map_err(|e| Error::Corrupted(format!("bincode decode ({} bytes): {e}", raw.len())))
+}
+
+fn encode<T: serde::Serialize>(val: &T) -> Result<Vec<u8>, Error> {
+    bincode::serialize(val).map_err(|e| Error::Corrupted(format!("bincode encode: {e}")))
+}
 
 /// Publication state of a blog post.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
@@ -388,7 +417,7 @@ pub struct VideoPodcast {
     pub published_at: Option<u64>,
 }
 
-/// The main Database manager for Creator Command Center (CCC)
+/// The main Database manager for Nuntius (CCC)
 pub struct CccDB {
     db: Database,
 }
@@ -418,10 +447,29 @@ impl CccDB {
             write_txn.open_table(VIDEO_PODCASTS_TABLE)?;
             write_txn.open_table(VIDEO_PODCASTS_CHRONO_INDEX)?;
             write_txn.open_table(VIDEO_PODCASTS_SLUG_INDEX)?;
+            write_txn.open_table(COUNTERS_TABLE)?;
         }
         write_txn.commit()?;
 
         Ok(Self { db })
+    }
+
+    /// Allocate the next id for a named counter. Atomic across writers.
+    /// Returns 1 on the first call for a given name, then 2, 3, ...
+    /// Use this instead of `SystemTime::as_secs()` for any primary key
+    /// that can be written more than once per second (CI-driven podcast
+    /// imports, batch uploads, etc.).
+    pub fn next_id(&self, name: &str) -> Result<u64, Error> {
+        let write_txn = self.db.begin_write()?;
+        let next = {
+            let mut counters = write_txn.open_table(COUNTERS_TABLE)?;
+            let current = counters.get(name)?.map(|v| v.value()).unwrap_or(0);
+            let next = current + 1;
+            counters.insert(name, next)?;
+            next
+        };
+        write_txn.commit()?;
+        Ok(next)
     }
 
     // --- BLOG POSTS ---
@@ -455,7 +503,7 @@ impl CccDB {
             // Drop any stale row+indexes for this id (handles slug renames
             // and status flips cleanly).
             if let Some(prev_raw) = main_table.get(post.id)? {
-                let prev: BlogPost = bincode::deserialize(prev_raw.value()).unwrap();
+                let prev: BlogPost = decode(prev_raw.value())?;
                 if prev.slug != post.slug {
                     slug_table.remove(prev.slug.as_str())?;
                 }
@@ -464,7 +512,7 @@ impl CccDB {
                 }
             }
 
-            let encoded: Vec<u8> = bincode::serialize(post).unwrap();
+            let encoded: Vec<u8> = encode(post)?;
             main_table.insert(post.id, encoded.as_slice())?;
             slug_table.insert(post.slug.as_str(), post.id)?;
 
@@ -487,7 +535,7 @@ impl CccDB {
             let mut slug_table = write_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
 
             if let Some(prev_raw) = main_table.get(id)? {
-                let prev: BlogPost = bincode::deserialize(prev_raw.value()).unwrap();
+                let prev: BlogPost = decode(prev_raw.value())?;
                 slug_table.remove(prev.slug.as_str())?;
                 if let Some(ts) = prev.published_at {
                     chrono_table.remove(Self::chrono_key(ts, prev.id).as_str())?;
@@ -503,9 +551,7 @@ impl CccDB {
     pub fn get_blog_post(&self, id: u64) -> Result<Option<BlogPost>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(BLOG_POSTS_TABLE)?;
-        Ok(table
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        table.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     /// Single post by slug.
@@ -518,9 +564,10 @@ impl CccDB {
             Some(v) => v.value(),
             None => return Ok(None),
         };
-        Ok(main_table
+        main_table
             .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+            .map(|raw| decode(raw.value()))
+            .transpose()
     }
 
     /// Most-recent Published posts for the public reader.
@@ -533,7 +580,7 @@ impl CccDB {
         for item in chrono_table.range("0"..="9")?.rev().take(limit) {
             let (_, id) = item?;
             if let Some(raw) = main_table.get(id.value())? {
-                out.push(bincode::deserialize(raw.value()).unwrap());
+                out.push(decode(raw.value())?);
             }
         }
         Ok(out)
@@ -548,8 +595,8 @@ impl CccDB {
         let mut out: Vec<BlogPost> = main_table
             .iter()?
             .filter_map(|r| r.ok())
-            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
-            .collect();
+            .map(|(_, v)| decode(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
         // Newest first by updated_at.
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(out)
@@ -580,7 +627,7 @@ impl CccDB {
                 }
             }
             if let Some(prev_raw) = main.get(ep.id)? {
-                let prev: PodcastEpisode = bincode::deserialize(prev_raw.value()).unwrap();
+                let prev: PodcastEpisode = decode(prev_raw.value())?;
                 if prev.slug != ep.slug {
                     slug.remove(prev.slug.as_str())?;
                 }
@@ -589,7 +636,7 @@ impl CccDB {
                 }
             }
 
-            let bytes = bincode::serialize(ep).unwrap();
+            let bytes = encode(ep)?;
             main.insert(ep.id, bytes.as_slice())?;
             slug.insert(ep.slug.as_str(), ep.id)?;
             if ep.status == EpisodeStatus::Published {
@@ -609,7 +656,7 @@ impl CccDB {
             let mut chrono = write_txn.open_table(PODCASTS_CHRONO_INDEX)?;
             let mut slug = write_txn.open_table(PODCASTS_SLUG_INDEX)?;
             if let Some(prev_raw) = main.get(id)? {
-                let prev: PodcastEpisode = bincode::deserialize(prev_raw.value()).unwrap();
+                let prev: PodcastEpisode = decode(prev_raw.value())?;
                 slug.remove(prev.slug.as_str())?;
                 if let Some(ts) = prev.published_at {
                     chrono.remove(Self::podcast_chrono_key(ts, prev.id).as_str())?;
@@ -633,7 +680,7 @@ impl CccDB {
         for item in chrono.range("0"..="9")?.rev().take(limit) {
             let (_, id) = item?;
             if let Some(raw) = main.get(id.value())? {
-                out.push(bincode::deserialize(raw.value()).unwrap());
+                out.push(decode(raw.value())?);
             }
         }
         Ok(out)
@@ -646,8 +693,8 @@ impl CccDB {
         let mut out: Vec<PodcastEpisode> = main
             .iter()?
             .filter_map(|r| r.ok())
-            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
-            .collect();
+            .map(|(_, v)| decode(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(out)
     }
@@ -655,9 +702,7 @@ impl CccDB {
     pub fn get_podcast_episode(&self, id: u64) -> Result<Option<PodcastEpisode>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(PODCASTS_TABLE)?;
-        Ok(table
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        table.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     pub fn get_podcast_episode_by_slug(&self, slug: &str) -> Result<Option<PodcastEpisode>, Error> {
@@ -668,9 +713,7 @@ impl CccDB {
             Some(v) => v.value(),
             None => return Ok(None),
         };
-        Ok(main
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        main.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     // --- VIDEO PODCASTS ---
@@ -696,7 +739,7 @@ impl CccDB {
                 }
             }
             if let Some(prev_raw) = main.get(video.id)? {
-                let prev: VideoPodcast = bincode::deserialize(prev_raw.value()).unwrap();
+                let prev: VideoPodcast = decode(prev_raw.value())?;
                 if prev.slug != video.slug {
                     slug.remove(prev.slug.as_str())?;
                 }
@@ -705,7 +748,7 @@ impl CccDB {
                 }
             }
 
-            let bytes = bincode::serialize(video).unwrap();
+            let bytes = encode(video)?;
             main.insert(video.id, bytes.as_slice())?;
             slug.insert(video.slug.as_str(), video.id)?;
             if video.status == VideoStatus::Published {
@@ -725,7 +768,7 @@ impl CccDB {
             let mut chrono = write_txn.open_table(VIDEO_PODCASTS_CHRONO_INDEX)?;
             let mut slug = write_txn.open_table(VIDEO_PODCASTS_SLUG_INDEX)?;
             if let Some(prev_raw) = main.get(id)? {
-                let prev: VideoPodcast = bincode::deserialize(prev_raw.value()).unwrap();
+                let prev: VideoPodcast = decode(prev_raw.value())?;
                 slug.remove(prev.slug.as_str())?;
                 if let Some(ts) = prev.published_at {
                     chrono.remove(Self::video_chrono_key(ts, prev.id).as_str())?;
@@ -740,9 +783,7 @@ impl CccDB {
     pub fn get_video_podcast(&self, id: u64) -> Result<Option<VideoPodcast>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(VIDEO_PODCASTS_TABLE)?;
-        Ok(table
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        table.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     pub fn get_video_podcast_by_slug(&self, slug: &str) -> Result<Option<VideoPodcast>, Error> {
@@ -753,9 +794,7 @@ impl CccDB {
             Some(v) => v.value(),
             None => return Ok(None),
         };
-        Ok(main
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        main.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     pub fn latest_published_video_podcasts(
@@ -769,7 +808,7 @@ impl CccDB {
         for item in chrono.range("0"..="9")?.rev().take(limit) {
             let (_, id) = item?;
             if let Some(raw) = main.get(id.value())? {
-                out.push(bincode::deserialize(raw.value()).unwrap());
+                out.push(decode(raw.value())?);
             }
         }
         Ok(out)
@@ -781,8 +820,8 @@ impl CccDB {
         let mut out: Vec<VideoPodcast> = main
             .iter()?
             .filter_map(|r| r.ok())
-            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
-            .collect();
+            .map(|(_, v)| decode(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(out)
     }
@@ -801,7 +840,7 @@ impl CccDB {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(TRACKS_TABLE)?;
-            let bytes = bincode::serialize(track).unwrap();
+            let bytes = encode(track)?;
             table.insert(track.id, bytes.as_slice())?;
         }
         write_txn.commit()?;
@@ -811,9 +850,7 @@ impl CccDB {
     pub fn get_track(&self, id: u64) -> Result<Option<Track>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(TRACKS_TABLE)?;
-        Ok(table
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        table.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     pub fn delete_track(&self, id: u64) -> Result<(), Error> {
@@ -832,8 +869,8 @@ impl CccDB {
         let mut out: Vec<Track> = table
             .iter()?
             .filter_map(|r| r.ok())
-            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
-            .collect();
+            .map(|(_, v)| decode(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         Ok(out)
     }
@@ -844,7 +881,7 @@ impl CccDB {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
-            let bytes = bincode::serialize(job).unwrap();
+            let bytes = encode(job)?;
             table.insert(job.id, bytes.as_slice())?;
         }
         write_txn.commit()?;
@@ -854,9 +891,7 @@ impl CccDB {
     pub fn get_transcription_job(&self, id: u64) -> Result<Option<TranscriptionJob>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
-        Ok(table
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        table.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     pub fn delete_transcription_job(&self, id: u64) -> Result<(), Error> {
@@ -877,8 +912,8 @@ impl CccDB {
         let mut out: Vec<TranscriptionJob> = table
             .iter()?
             .filter_map(|r| r.ok())
-            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
-            .collect();
+            .map(|(_, v)| decode(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(out)
     }
@@ -912,12 +947,12 @@ impl CccDB {
             }
             // Drop stale email-index entry if email changed.
             if let Some(prev_raw) = main.get(sub.id)? {
-                let prev: Subscriber = bincode::deserialize(prev_raw.value()).unwrap();
+                let prev: Subscriber = decode(prev_raw.value())?;
                 if prev.email != sub.email {
                     idx.remove(prev.email.as_str())?;
                 }
             }
-            let bytes = bincode::serialize(sub).unwrap();
+            let bytes = encode(sub)?;
             main.insert(sub.id, bytes.as_slice())?;
             idx.insert(sub.email.as_str(), sub.id)?;
         }
@@ -931,7 +966,7 @@ impl CccDB {
             let mut main = write_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
             let mut idx = write_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
             if let Some(prev_raw) = main.get(id)? {
-                let prev: Subscriber = bincode::deserialize(prev_raw.value()).unwrap();
+                let prev: Subscriber = decode(prev_raw.value())?;
                 idx.remove(prev.email.as_str())?;
             }
             main.remove(id)?;
@@ -948,9 +983,7 @@ impl CccDB {
             Some(v) => v.value(),
             None => return Ok(None),
         };
-        Ok(main
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        main.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     pub fn all_subscribers(&self) -> Result<Vec<Subscriber>, Error> {
@@ -959,8 +992,8 @@ impl CccDB {
         let mut out: Vec<Subscriber> = table
             .iter()?
             .filter_map(|r| r.ok())
-            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
-            .collect();
+            .map(|(_, v)| decode(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         Ok(out)
     }
@@ -971,7 +1004,7 @@ impl CccDB {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(ADS_TABLE)?;
-            let bytes = bincode::serialize(ad).unwrap();
+            let bytes = encode(ad)?;
             table.insert(ad.id, bytes.as_slice())?;
         }
         write_txn.commit()?;
@@ -981,9 +1014,7 @@ impl CccDB {
     pub fn get_ad(&self, id: u64) -> Result<Option<Ad>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(ADS_TABLE)?;
-        Ok(table
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        table.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     pub fn delete_ad(&self, id: u64) -> Result<(), Error> {
@@ -1002,8 +1033,8 @@ impl CccDB {
         let mut out: Vec<Ad> = table
             .iter()?
             .filter_map(|r| r.ok())
-            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
-            .collect();
+            .map(|(_, v)| decode(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(out)
     }
@@ -1014,7 +1045,7 @@ impl CccDB {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(FEDERATION_FOLLOWERS_TABLE)?;
-            let bytes = bincode::serialize(follower).unwrap();
+            let bytes = encode(follower)?;
             table.insert(follower.actor_url.as_str(), bytes.as_slice())?;
         }
         write_txn.commit()?;
@@ -1037,8 +1068,8 @@ impl CccDB {
         let mut out: Vec<FederationFollower> = table
             .iter()?
             .filter_map(|r| r.ok())
-            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
-            .collect();
+            .map(|(_, v)| decode(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort_by(|a, b| b.followed_at.cmp(&a.followed_at));
         Ok(out)
     }
@@ -1049,7 +1080,7 @@ impl CccDB {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(PLAYLISTS_TABLE)?;
-            let bytes = bincode::serialize(p).unwrap();
+            let bytes = encode(p)?;
             table.insert(p.id, bytes.as_slice())?;
         }
         write_txn.commit()?;
@@ -1059,9 +1090,7 @@ impl CccDB {
     pub fn get_playlist(&self, id: u64) -> Result<Option<Playlist>, Error> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(PLAYLISTS_TABLE)?;
-        Ok(table
-            .get(id)?
-            .map(|raw| bincode::deserialize(raw.value()).unwrap()))
+        table.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
     /// Drops the playlist row AND every PlaylistTracks entry for it.
@@ -1087,8 +1116,8 @@ impl CccDB {
         let mut out: Vec<Playlist> = table
             .iter()?
             .filter_map(|r| r.ok())
-            .map(|(_, v)| bincode::deserialize(v.value()).unwrap())
-            .collect();
+            .map(|(_, v)| decode(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort_by(|a, b| {
             b.priority
                 .cmp(&a.priority)
@@ -1149,5 +1178,174 @@ impl CccDB {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn tmp_path(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "ccc-database-test-{label}-{}-{nanos}.redb",
+            std::process::id()
+        ));
+        p
+    }
+
+    fn cleanup(path: &PathBuf) {
+        let _ = std::fs::remove_file(path);
+    }
+
+    // ---- counter / next_id ----
+
+    #[test]
+    fn next_id_starts_at_one_and_increments() {
+        let path = tmp_path("next_id");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(db.next_id("a").unwrap(), 1);
+        assert_eq!(db.next_id("a").unwrap(), 2);
+        assert_eq!(db.next_id("a").unwrap(), 3);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn next_id_namespaces_are_independent() {
+        let path = tmp_path("next_id_ns");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(db.next_id("podcast_episode").unwrap(), 1);
+        assert_eq!(db.next_id("podcast_episode").unwrap(), 2);
+        assert_eq!(db.next_id("transcription_job").unwrap(), 1);
+        assert_eq!(db.next_id("video_podcast").unwrap(), 1);
+        assert_eq!(db.next_id("podcast_episode").unwrap(), 3);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn next_id_survives_reopen() {
+        let path = tmp_path("next_id_reopen");
+        {
+            let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+            assert_eq!(db.next_id("k").unwrap(), 1);
+            assert_eq!(db.next_id("k").unwrap(), 2);
+        }
+        // Reopen: counter must keep growing, not reset to 1.
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(db.next_id("k").unwrap(), 3);
+        cleanup(&path);
+    }
+
+    // ---- blog post round-trip ----
+
+    fn sample_post(id: u64, slug: &str) -> BlogPost {
+        BlogPost {
+            id,
+            slug: slug.into(),
+            title: format!("Title {id}"),
+            content: "# hello".into(),
+            status: PostStatus::Published,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            published_at: Some(1_700_000_000),
+        }
+    }
+
+    #[test]
+    fn blog_post_round_trip() {
+        let path = tmp_path("blog_roundtrip");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        let post = sample_post(42, "hello-world");
+        db.upsert_blog_post(&post).unwrap();
+        let loaded = db.get_blog_post(42).unwrap().expect("post exists");
+        assert_eq!(loaded.slug, "hello-world");
+        assert_eq!(loaded.title, "Title 42");
+        assert_eq!(loaded.content, "# hello");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn blog_post_slug_uniqueness_enforced() {
+        let path = tmp_path("blog_slug");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        db.upsert_blog_post(&sample_post(1, "shared")).unwrap();
+        // Different id, same slug -> must error.
+        let err = db.upsert_blog_post(&sample_post(2, "shared")).unwrap_err();
+        assert!(matches!(err, Error::Corrupted(_)), "got: {err:?}");
+        cleanup(&path);
+    }
+
+    // ---- corrupt row no longer panics ----
+    //
+    // The whole reason we swapped `.unwrap()` for `decode()`/`encode()`
+    // was to convert panic on bad data into a clean `Error::Corrupted`.
+    // We test the inverse: if we write garbage into a value cell,
+    // the read path returns an error instead of panicking.
+
+    #[test]
+    fn corrupt_blog_post_row_returns_error_not_panic() {
+        let path = tmp_path("blog_corrupt");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        // Open a write txn, write a garbage blob at id=99, commit.
+        {
+            let write_txn = db.db.begin_write().unwrap();
+            {
+                let mut t = write_txn.open_table(BLOG_POSTS_TABLE).unwrap();
+                t.insert(99u64, b"this is not a bincode BlogPost".as_slice())
+                    .unwrap();
+            }
+            write_txn.commit().unwrap();
+        }
+        // Reading it must surface a `Corrupted` error, not panic.
+        let err = db.get_blog_post(99).unwrap_err();
+        assert!(matches!(err, Error::Corrupted(_)), "got: {err:?}");
+        cleanup(&path);
+    }
+
+    // ---- podcast chrono index is publish-only ----
+
+    #[test]
+    fn chrono_index_excludes_drafts() {
+        let path = tmp_path("podcast_chrono");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        let draft = PodcastEpisode {
+            id: 1,
+            slug: "draft".into(),
+            title: "D".into(),
+            description: String::new(),
+            audio_path: "/tmp/x.mp3".into(),
+            mime_type: "audio/mpeg".into(),
+            size_bytes: 0,
+            duration_seconds: 0,
+            status: EpisodeStatus::Draft,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            published_at: None,
+            transcript_job_id: None,
+            members_only: false,
+        };
+        let published = PodcastEpisode {
+            id: 2,
+            status: EpisodeStatus::Published,
+            published_at: Some(1_700_000_000),
+            slug: "pub".into(),
+            title: "P".into(),
+            ..draft.clone()
+        };
+        db.upsert_podcast_episode(&draft).unwrap();
+        db.upsert_podcast_episode(&published).unwrap();
+        let published_list = db.all_podcast_episodes().unwrap();
+        assert_eq!(published_list.len(), 2);
+        // The public chrono getter only returns Published.
+        let public = db.latest_published_podcast_episodes(10).unwrap();
+        assert_eq!(public.len(), 1, "drafts must not be in the chrono index");
+        assert_eq!(public[0].id, 2);
+        cleanup(&path);
     }
 }

@@ -185,7 +185,8 @@ pub fn http_date(secs: u64) -> String {
         3 => "Wed",
         4 => "Thu",
         5 => "Fri",
-        _ => "Sat",
+        6 => "Sat",
+        _ => "???",
     };
     let month_str = match mo {
         1 => "Jan",
@@ -199,7 +200,8 @@ pub fn http_date(secs: u64) -> String {
         9 => "Sep",
         10 => "Oct",
         11 => "Nov",
-        _ => "Dec",
+        12 => "Dec",
+        _ => "???",
     };
     format!(
         "{}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
@@ -246,4 +248,35 @@ fn unix_to_ymdhms_weekday(secs: u64) -> (u32, u32, u32, u32, u32, u32, u32) {
 
 fn is_leap(y: u32) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_date_known_timestamps() {
+        // 2024-01-15 12:34:56 UTC == 1705322096. Expected: "Mon, 15 Jan 2024 12:34:56 GMT"
+        assert_eq!(http_date(1_705_322_096), "Mon, 15 Jan 2024 12:34:56 GMT");
+        // Unix epoch
+        assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
+    }
+
+    #[test]
+    fn http_date_leap_day() {
+        // 2024-02-29 00:00:00 UTC == 1709164800. Expected: "Thu, 29 Feb 2024 00:00:00 GMT"
+        assert_eq!(http_date(1_709_164_800), "Thu, 29 Feb 2024 00:00:00 GMT");
+    }
+
+    #[test]
+    fn http_date_century_boundary() {
+        // 2100-03-01 00:00:00 UTC == 4_107_542_400. Monday.
+        // (2100 is NOT a leap year, even though it's divisible by 4.
+        //  This is the exact bug the audit warned about — if the
+        //  date math regressed, the output month would be "Mar"
+        //  without the 28-day February, vs the buggy "Feb 29".)
+        assert_eq!(http_date(4_107_542_400), "Mon, 01 Mar 2100 00:00:00 GMT");
+        // 2100-01-01 00:00:00 UTC == 4_102_444_800. Friday.
+        assert_eq!(http_date(4_102_444_800), "Fri, 01 Jan 2100 00:00:00 GMT");
+    }
 }

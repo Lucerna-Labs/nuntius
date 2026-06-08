@@ -1,0 +1,14 @@
+[package]
+name = "ccc-plugin-utils"
+version = "0.1.0"
+edition = "2021"
+description = "Shared helpers for Nuntius (CCC) plugins: time formatting, HTML escaping, file sanitization, byte-size humanization, template rendering, and a generic TOML sidecar store."
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+askama = "0.12"
+axum = { version = "0.7.9", features = [] }
+
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }

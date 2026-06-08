@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 ccc-core = { path = "../core" }
 ccc-database = { path = "../database" }
+ccc-plugin-utils = { path = "../ccc-plugin-utils" }
 
 axum = "0.7.9"
 tokio = { version = "1.0", features = ["full"] }
@@ -13,4 +14,3 @@ askama = "0.12"
 askama_axum = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"

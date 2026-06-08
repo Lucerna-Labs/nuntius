@@ -1,6 +1,6 @@
 {% extends "_admin_layout.html" %}
 
-{% block title %}Videos — Creator Command Center{% endblock %}
+{% block title %}Videos — Nuntius{% endblock %}
 
 {% block content %}
 <header class="cms-page__header">
@@ -17,7 +17,7 @@
 </header>
 
 {% if videos.is_empty() %}
-  <p>No videos yet.</p>
+  <p>No videos yet. Published videos appear on <code>/videos</code>.</p>
 {% else %}
 <table class="cms-table">
   <thead>
@@ -48,8 +48,9 @@
 <div class="cms-rail__card">
   <h3>Public</h3>
   <ul class="cms-rail__list">
-    <li><code>/videos/:slug</code> — HLS player page</li>
-    <li><code>/videos/hls/...</code> — segments served by axum</li>
+    <li><a href="/videos">Video page</a> (published on-demand videos)</li>
+    <li><code>/videos/:slug</code> - HLS player page</li>
+    <li><code>/videos/hls/...</code> - segments served by axum</li>
   </ul>
 </div>
 {% endblock %}

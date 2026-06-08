@@ -120,7 +120,7 @@ impl Plugin for CccPluginAnalyticsPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         println!(
             "Initializing Analytics: in-memory ring buffer (capacity {})",
             BUFFER_SIZE

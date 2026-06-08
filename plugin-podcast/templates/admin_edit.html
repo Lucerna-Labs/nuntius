@@ -1,6 +1,6 @@
 {% extends "_admin_layout.html" %}
 
-{% block title %}Edit episode — Creator Command Center{% endblock %}
+{% block title %}Edit episode — Nuntius{% endblock %}
 
 {% block content %}
 <header class="cms-page__header">
@@ -34,11 +34,11 @@
     <legend class="cms-field__label">Status</legend>
     <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
       <input type="radio" name="status" value="draft" {% if status_str == "draft" %}checked{% endif %}>
-      <span>Draft — not in the public RSS feed.</span>
+      <span>Draft - previewed as upcoming, not playable publicly.</span>
     </label>
     <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">
       <input type="radio" name="status" value="published" {% if status_str == "published" %}checked{% endif %}>
-      <span>Published — live.</span>
+      <span>Published - appears on <code>/podcasts</code>, its episode page, and the public RSS feed.</span>
     </label>
   </fieldset>
   <label style="display:flex; gap:8px; align-items:center; padding:6px 0;">

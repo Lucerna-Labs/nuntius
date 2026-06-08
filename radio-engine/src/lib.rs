@@ -30,7 +30,7 @@ use axum::{
 use base64::Engine as _;
 use bytes::Bytes;
 use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
-use ccc_database::{CccDB, Track};
+use ccc_database::{CccDB, EpisodeStatus, Track, VideoStatus};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -134,7 +134,7 @@ impl Default for RadioSettings {
             mount_path: "/listen.mp3".into(),
             source_password: "hackme".into(),
             content_type: "audio/mpeg".into(),
-            stream_name: "Creator Command Center Radio".into(),
+            stream_name: "Nuntius Radio".into(),
             library_dir: default_library_dir(),
             relay_url: String::new(),
             station_bitrate_kbps: default_station_bitrate(),
@@ -207,10 +207,11 @@ impl SettingsStore {
 // ============================================================================
 
 #[derive(Clone)]
-struct EngineState {
+pub(crate) struct EngineState {
     settings: Arc<SettingsStore>,
     tx: broadcast::Sender<Bytes>,
-    source_alive: Arc<AtomicBool>,
+    pub(crate) source_alive: Arc<AtomicBool>,
+    pub(crate) autodj_paused: Arc<AtomicBool>,
     listener_count: Arc<AtomicUsize>,
     /// Where uploaded music tracks live on disk.
     library_dir: Arc<PathBuf>,
@@ -224,13 +225,46 @@ struct EngineState {
     recording: Arc<RwLock<Option<RecordingHandle>>>,
     /// True iff the relay task currently has an upstream connection
     /// and is pumping bytes. AutoDJ pauses when relay_alive == true.
-    relay_alive: Arc<AtomicBool>,
+    pub(crate) relay_alive: Arc<AtomicBool>,
     /// Map from variant mount path → its dedicated broadcast channel.
     /// One ffmpeg subprocess per variant transcodes the master stream.
     variants: Arc<RwLock<std::collections::HashMap<String, broadcast::Sender<Bytes>>>>,
     /// Live database handle (None when constructed via the legacy CLI
     /// `radio` subcommand, which has no DB).
     db: Option<Arc<CccDB>>,
+    /// Per-engine one-shot spawn flags. Replaces the old
+    /// `static SPAWNED: AtomicBool` pattern that didn't work if
+    /// you ever constructed two engines in the same process (tests,
+    /// future hot-reload).
+    spawn_flags: Arc<RwLock<std::collections::HashSet<&'static str>>>,
+}
+
+impl EngineState {
+    /// Spawn a background task exactly once per (engine, name) pair.
+    /// The first call spawns the task; subsequent calls with the same
+    /// `name` are no-ops. Returns `Some(JoinHandle)` on the first call,
+    /// `None` afterwards.
+    ///
+    /// The closure receives the engine state by value (matching the
+    /// historical `spawn_*` signatures) and returns a future to run
+    /// on the tokio runtime.
+    pub fn spawn_once<F, Fut>(
+        &self,
+        name: &'static str,
+        f: F,
+    ) -> Option<tokio::task::JoinHandle<()>>
+    where
+        F: FnOnce(EngineState) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let mut flags = self.spawn_flags.write().expect("spawn flags poisoned");
+        if !flags.insert(name) {
+            return None;
+        }
+        drop(flags);
+        let st = self.clone();
+        Some(tokio::spawn(f(st)))
+    }
 }
 
 #[derive(Clone)]
@@ -266,6 +300,10 @@ pub struct RadioEnginePlugin {
     pub port: u16,
     pub protocol: StreamingProtocol,
     state: EngineState,
+    /// Cancellation token for the engine's accept loop. The CLI flips
+    /// it on SIGINT/SIGTERM so the autodj/relay/recorder tasks can wind
+    /// down cleanly instead of being killed mid-write.
+    shutdown: tokio_util::sync::CancellationToken,
 }
 
 impl RadioEnginePlugin {
@@ -284,6 +322,7 @@ impl RadioEnginePlugin {
             }),
             tx,
             source_alive: Arc::new(AtomicBool::new(false)),
+            autodj_paused: Arc::new(AtomicBool::new(false)),
             listener_count: Arc::new(AtomicUsize::new(0)),
             library_dir: Arc::new(library_dir),
             now_playing: Arc::new(RwLock::new(None)),
@@ -294,12 +333,29 @@ impl RadioEnginePlugin {
             relay_alive: Arc::new(AtomicBool::new(false)),
             variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
+            spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
         };
         Self {
             port,
             protocol,
             state,
+            shutdown: tokio_util::sync::CancellationToken::new(),
         }
+    }
+
+    /// Trigger graceful shutdown. Safe to call from a signal handler.
+    /// After calling, [`Self::run`] will return at the next cancellation
+    /// point (the TCP accept loop).
+    pub fn shutdown(&self) {
+        self.shutdown.cancel();
+    }
+
+    /// Returns a clone of the plugin's shutdown token. The caller can
+    /// `select!` on it or `cancel()` it from another task to trigger
+    /// graceful shutdown. Clones share the same underlying token, so
+    /// cancelling one cancels all.
+    pub fn shutdown_token(&self) -> tokio_util::sync::CancellationToken {
+        self.shutdown.clone()
     }
 
     /// Construct from `[plugin.radio-engine]` config — the CMS-driven path.
@@ -321,6 +377,7 @@ impl RadioEnginePlugin {
             settings: store,
             tx,
             source_alive: Arc::new(AtomicBool::new(false)),
+            autodj_paused: Arc::new(AtomicBool::new(false)),
             listener_count: Arc::new(AtomicUsize::new(0)),
             library_dir: Arc::new(library_dir),
             now_playing: Arc::new(RwLock::new(None)),
@@ -331,18 +388,21 @@ impl RadioEnginePlugin {
             relay_alive: Arc::new(AtomicBool::new(false)),
             variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
+            spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
         };
         Ok(Self {
             port,
             protocol: StreamingProtocol::Icecast,
             state,
+            shutdown: tokio_util::sync::CancellationToken::new(),
         })
     }
 
     /// Run the engine until something cancels (or forever). Used by the
-    /// standalone `radio` CLI subcommand.
+    /// standalone `radio` CLI subcommand. Returns when the cancellation
+    /// token is flipped (typically by SIGINT/SIGTERM in the CLI).
     pub async fn run(&self) -> Result<(), std::io::Error> {
-        run_engine(self.state.clone()).await
+        run_engine(self.state.clone(), self.shutdown.clone()).await
     }
 }
 
@@ -356,7 +416,19 @@ impl Plugin for RadioEnginePlugin {
     }
 
     fn id(&self) -> String {
-        "radio".into()
+        // Use the same identifier as the dispatch table in cli/src/registry.rs
+        // and the slug operators put in `ccc.toml`. The admin URL mirrors
+        // this via `admin_routes()` nesting at `/admin/{id}`.
+        "radio-engine".into()
+    }
+
+    /// The plugin's admin landing page. The framework nests the routes
+    /// returned by `admin_routes()` under `/admin/{id}`, so `/radio` here
+    /// gives us the final URL `/admin/radio-engine/radio` — the dashboard.
+    /// Override keeps the radio engine's index page reachable via the
+    /// canonical id-based path.
+    fn admin_url(&self) -> String {
+        "/admin/radio-engine/radio".into()
     }
     fn kind(&self) -> &'static str {
         "BROADCAST"
@@ -372,6 +444,7 @@ impl Plugin for RadioEnginePlugin {
         let snap = self.state.settings.snapshot();
         let live = self.state.source_alive.load(Ordering::SeqCst);
         let relay = self.state.relay_alive.load(Ordering::SeqCst);
+        let autodj_paused = self.state.autodj_paused.load(Ordering::SeqCst);
         let np = self.state.now_playing.read().ok().and_then(|g| g.clone());
         let listeners = self.state.listener_count.load(Ordering::SeqCst);
         let track_count = self
@@ -399,6 +472,7 @@ impl Plugin for RadioEnginePlugin {
                 "configured": true,
                 "live": live,
                 "relay": relay,
+                "autodj_paused": autodj_paused,
                 "config": {
                     "port": snap.port,
                     "mount_path": snap.mount_path,
@@ -417,7 +491,7 @@ impl Plugin for RadioEnginePlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         let snap = self.state.settings.snapshot();
         println!(
             "Initializing Radio Engine on TCP {} (mount {})",
@@ -426,8 +500,9 @@ impl Plugin for RadioEnginePlugin {
         // Spawn the engine. Engine error => we log and exit the task; the
         // host stays up.
         let st = self.state.clone();
+        let shutdown = self.shutdown.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_engine(st).await {
+            if let Err(e) = run_engine(st, shutdown).await {
                 eprintln!("[radio-engine] terminated: {}", e);
             }
         });
@@ -442,6 +517,7 @@ impl Plugin for RadioEnginePlugin {
         };
         Some(
             Router::new()
+                .route("/", get(public_home))
                 .route("/radio", get(public_listen))
                 .route("/api/radio/nowplaying", get(public_now_playing))
                 .route("/api/radio/library", get(public_library))
@@ -464,10 +540,11 @@ impl Plugin for RadioEnginePlugin {
             db: Some(ctx.db.clone()),
             ..self.state.clone()
         };
-        spawn_autodj(st.clone());
-        spawn_recorder(st.clone());
-        spawn_relay(st.clone());
-        spawn_variant_transcoders(st.clone());
+        let shutdown = self.shutdown.clone();
+        spawn_autodj(st.clone(), shutdown.clone());
+        spawn_recorder(st.clone(), shutdown.clone());
+        spawn_relay(st.clone(), shutdown.clone());
+        spawn_variant_transcoders(st.clone(), shutdown.clone());
         Some(
             Router::new()
                 .route("/radio", get(admin_get).post(admin_post))
@@ -499,6 +576,8 @@ impl Plugin for RadioEnginePlugin {
                 )
                 .route("/radio/record/start", post(admin_record_start))
                 .route("/radio/record/stop", post(admin_record_stop))
+                .route("/radio/autodj/pause", post(admin_autodj_pause))
+                .route("/radio/autodj/resume", post(admin_autodj_resume))
                 .layer(axum::extract::DefaultBodyLimit::max(
                     library::MAX_TRACK_BYTES,
                 ))
@@ -509,7 +588,7 @@ impl Plugin for RadioEnginePlugin {
     fn admin_nav(&self, _ctx: &AppContext) -> Vec<AdminNavEntry> {
         vec![AdminNavEntry {
             label: "Radio",
-            href: "/admin/radio".into(),
+            href: "/admin/radio-engine/radio".into(),
             icon: "📻",
             sort: 1000,
         }]
@@ -524,25 +603,38 @@ impl Plugin for RadioEnginePlugin {
 // TCP engine — source + listener handling
 // ============================================================================
 
-async fn run_engine(state: EngineState) -> Result<(), std::io::Error> {
+async fn run_engine(
+    state: EngineState,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> Result<(), std::io::Error> {
     let port = state.settings.snapshot().port;
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await?;
     println!("[radio-engine] listening on {}", addr);
 
     loop {
-        match listener.accept().await {
-            Ok((sock, peer)) => {
-                let st = state.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_connection(sock, peer, st).await {
-                        eprintln!("[radio-engine] connection {} ended: {}", peer, e);
-                    }
-                });
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                println!("[radio-engine] shutdown signal received, stopping accept loop");
+                break;
             }
-            Err(e) => eprintln!("[radio-engine] accept error: {}", e),
+            accept = listener.accept() => {
+                match accept {
+                    Ok((sock, peer)) => {
+                        let st = state.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_connection(sock, peer, st).await {
+                                eprintln!("[radio-engine] connection {} ended: {}", peer, e);
+                            }
+                        });
+                    }
+                    Err(e) => eprintln!("[radio-engine] accept error: {}", e),
+                }
+            }
         }
     }
+    Ok(())
 }
 
 async fn handle_connection(
@@ -793,6 +885,7 @@ struct AdminDashboardPage {
     mount_path: String,
     track_count: usize,
     recording_path: Option<String>,
+    autodj_paused: bool,
 }
 
 async fn admin_get(State(state): State<EngineState>) -> Response {
@@ -815,6 +908,7 @@ async fn admin_get(State(state): State<EngineState>) -> Response {
         mount_path: snap.mount_path,
         track_count,
         recording_path,
+        autodj_paused: state.autodj_paused.load(Ordering::SeqCst),
     })
 }
 
@@ -891,7 +985,7 @@ async fn admin_post(State(state): State<EngineState>, Form(form): Form<SettingsF
         snap.crossfade_seconds = x.min(10);
     }
     let _ = state.settings.replace(snap);
-    Redirect::to("/admin/radio/engineering?saved=1").into_response()
+    Redirect::to("/admin/radio-engine/radio/engineering?saved=1").into_response()
 }
 
 // ============================================================================
@@ -943,6 +1037,7 @@ async fn public_now_playing(State(state): State<EngineState>) -> Response {
         "history": history,
         "live": state.source_alive.load(Ordering::SeqCst),
         "relay": state.relay_alive.load(Ordering::SeqCst),
+        "autodj_paused": state.autodj_paused.load(Ordering::SeqCst),
         "recording": recording,
         "listeners": state.listener_count.load(Ordering::SeqCst),
         "stream_name": s.stream_name,
@@ -959,6 +1054,108 @@ struct PublicListenPage {
     stream_name: String,
 }
 
+#[derive(Template)]
+#[template(path = "public_home.html")]
+struct PublicHomePage {
+    stream_name: String,
+    podcasts: Vec<PublicMediaRow>,
+    videos: Vec<PublicMediaRow>,
+    upcoming: Vec<PublicMediaRow>,
+}
+
+struct PublicMediaRow {
+    title: String,
+    url: String,
+    description: String,
+    kind: &'static str,
+    duration: String,
+    date: String,
+}
+
+async fn public_home(State(state): State<EngineState>) -> Response {
+    let s = state.settings.snapshot();
+    let db = match state.db.as_ref() {
+        Some(db) => db,
+        None => {
+            return render(PublicHomePage {
+                stream_name: s.stream_name,
+                podcasts: Vec::new(),
+                videos: Vec::new(),
+                upcoming: Vec::new(),
+            })
+        }
+    };
+
+    let podcasts = db
+        .latest_published_podcast_episodes(6)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| !e.members_only)
+        .map(|e| PublicMediaRow {
+            title: e.title,
+            url: format!("/podcasts/{}", e.slug),
+            description: e.description,
+            kind: "Podcast",
+            duration: format_seconds(e.duration_seconds),
+            date: e.published_at.map(format_unix).unwrap_or_default(),
+        })
+        .collect();
+
+    let videos = db
+        .latest_published_video_podcasts(6)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| PublicMediaRow {
+            title: v.title,
+            url: format!("/videos/{}", v.slug),
+            description: v.description,
+            kind: "Video",
+            duration: format_seconds(v.duration_seconds),
+            date: v.published_at.map(format_unix).unwrap_or_default(),
+        })
+        .collect();
+
+    let mut upcoming: Vec<PublicMediaRow> = Vec::new();
+    upcoming.extend(
+        db.all_podcast_episodes()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| e.status == EpisodeStatus::Draft && !e.members_only)
+            .take(4)
+            .map(|e| PublicMediaRow {
+                title: e.title,
+                url: "/podcasts".into(),
+                description: e.description,
+                kind: "Podcast",
+                duration: format_seconds(e.duration_seconds),
+                date: "Coming soon".into(),
+            }),
+    );
+    upcoming.extend(
+        db.all_video_podcasts()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|v| v.status == VideoStatus::Draft || v.status == VideoStatus::Transcoding)
+            .take(4)
+            .map(|v| PublicMediaRow {
+                title: v.title,
+                url: "/videos".into(),
+                description: v.description,
+                kind: "Video",
+                duration: format_seconds(v.duration_seconds),
+                date: "Coming soon".into(),
+            }),
+    );
+    upcoming.truncate(6);
+
+    render(PublicHomePage {
+        stream_name: s.stream_name,
+        podcasts,
+        videos,
+        upcoming,
+    })
+}
+
 async fn public_listen(State(state): State<EngineState>) -> Response {
     let s = state.settings.snapshot();
     render(PublicListenPage {
@@ -970,16 +1167,13 @@ async fn public_listen(State(state): State<EngineState>) -> Response {
 // AutoDJ — fills dead air when no live source is connected
 // ============================================================================
 
-fn spawn_autodj(state: EngineState) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static SPAWNED: AtomicBool = AtomicBool::new(false);
-    if SPAWNED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    tokio::spawn(autodj_loop(state));
+fn spawn_autodj(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    state.spawn_once("autodj", move |st| async move {
+        autodj_loop(st, shutdown).await;
+    });
 }
 
-async fn autodj_loop(state: EngineState) {
+async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
     use ccc_database::PlaylistKind;
     use rand::seq::SliceRandom;
 
@@ -995,7 +1189,15 @@ async fn autodj_loop(state: EngineState) {
     let mut mixer_disabled = false;
 
     loop {
+        if shutdown.is_cancelled() {
+            break;
+        }
         // Live source > relay > AutoDJ. Pause if either upstream is feeding bytes.
+        if state.autodj_paused.load(Ordering::SeqCst) {
+            *state.now_playing.write().expect("np poisoned") = None;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
         if state.source_alive.load(Ordering::SeqCst) {
             *state.now_playing.write().expect("np poisoned") = Some(NowPlaying {
                 source: "live",
@@ -1087,6 +1289,10 @@ async fn autodj_loop(state: EngineState) {
 
         println!("[autodj] starting pass: {}", source_label);
         for track in queue {
+            if state.autodj_paused.load(Ordering::SeqCst) {
+                *state.now_playing.write().expect("np poisoned") = None;
+                break;
+            }
             if state.source_alive.load(Ordering::SeqCst) || state.relay_alive.load(Ordering::SeqCst)
             {
                 break;
@@ -1123,12 +1329,16 @@ async fn autodj_loop(state: EngineState) {
 // per-variant broadcast channel. Listeners route by URL path.
 // ============================================================================
 
-fn spawn_variant_transcoders(state: EngineState) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static SPAWNED: AtomicBool = AtomicBool::new(false);
-    if SPAWNED.swap(true, Ordering::SeqCst) {
-        return;
-    }
+fn spawn_variant_transcoders(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    state.spawn_once("variant_transcoders", move |st| async move {
+        spawn_variant_transcoders_inner(st, shutdown).await;
+    });
+}
+
+async fn spawn_variant_transcoders_inner(
+    state: EngineState,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
     let variants = state.settings.snapshot().variant_mounts.clone();
     for v in variants {
         // Allocate the variant's broadcast channel and remember it.
@@ -1140,8 +1350,9 @@ fn spawn_variant_transcoders(state: EngineState) {
             .insert(v.path.clone(), tx.clone());
         let st = state.clone();
         let v_clone = v.clone();
+        let shutdown = shutdown.clone();
         tokio::spawn(async move {
-            run_variant_transcoder(st, v_clone, tx).await;
+            run_variant_transcoder(st, v_clone, tx, shutdown).await;
         });
     }
 }
@@ -1150,6 +1361,7 @@ async fn run_variant_transcoder(
     state: EngineState,
     variant: VariantMountSetting,
     out_tx: broadcast::Sender<Bytes>,
+    shutdown: tokio_util::sync::CancellationToken,
 ) {
     use std::process::Stdio;
     use tokio::io::AsyncReadExt;
@@ -1157,6 +1369,9 @@ async fn run_variant_transcoder(
     use tokio::process::Command;
 
     loop {
+        if shutdown.is_cancelled() {
+            break;
+        }
         let mut master_rx = state.tx.subscribe();
         let mut child = match Command::new("ffmpeg")
             .arg("-hide_banner")
@@ -1235,17 +1450,17 @@ async fn run_variant_transcoder(
 // bytes into our broadcast channel. Live source connections preempt it.
 // ============================================================================
 
-fn spawn_relay(state: EngineState) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static SPAWNED: AtomicBool = AtomicBool::new(false);
-    if SPAWNED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    tokio::spawn(relay_loop(state));
+fn spawn_relay(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    state.spawn_once("relay", move |st| async move {
+        relay_loop(st, shutdown).await;
+    });
 }
 
-async fn relay_loop(state: EngineState) {
+async fn relay_loop(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
     loop {
+        if shutdown.is_cancelled() {
+            break;
+        }
         let url = state.settings.snapshot().relay_url;
         if url.is_empty() {
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -1347,16 +1562,13 @@ async fn relay_once(state: &EngineState, url_str: &str) -> Result<(), String> {
 // Recording — dumps every broadcast byte to disk while enabled
 // ============================================================================
 
-fn spawn_recorder(state: EngineState) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static SPAWNED: AtomicBool = AtomicBool::new(false);
-    if SPAWNED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    tokio::spawn(recorder_loop(state));
+fn spawn_recorder(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    state.spawn_once("recorder", move |st| async move {
+        recorder_loop(st, shutdown).await;
+    });
 }
 
-async fn recorder_loop(state: EngineState) {
+async fn recorder_loop(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
     use tokio::fs::File;
     use tokio::io::AsyncWriteExt as _;
 
@@ -1365,38 +1577,49 @@ async fn recorder_loop(state: EngineState) {
     let mut current_file: Option<File> = None;
 
     loop {
-        match rx.recv().await {
-            Ok(chunk) => {
-                let want_path = state
-                    .recording
-                    .read()
-                    .expect("recording poisoned")
-                    .as_ref()
-                    .map(|h| h.path.clone());
-                if want_path != current_path {
-                    // State changed — close any open file and open the new one.
-                    if let Some(mut f) = current_file.take() {
-                        let _ = f.flush().await;
-                    }
-                    if let Some(p) = &want_path {
-                        if let Some(parent) = std::path::Path::new(p).parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        match File::create(p).await {
-                            Ok(f) => current_file = Some(f),
-                            Err(e) => {
-                                eprintln!("[radio-engine] could not open recording {}: {}", p, e);
-                            }
-                        }
-                    }
-                    current_path = want_path;
+        let chunk = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                // Flush any open recording file before exiting.
+                if let (Some(_p), Some(mut f)) = (current_path.take(), current_file.take()) {
+                    let _ = f.flush().await;
                 }
-                if let Some(f) = current_file.as_mut() {
-                    let _ = f.write_all(&chunk).await;
-                }
+                break;
             }
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(broadcast::error::RecvError::Closed) => break,
+            recv = rx.recv() => match recv {
+                Ok(c) => c,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        };
+        {
+            let want_path = state
+                .recording
+                .read()
+                .expect("recording poisoned")
+                .as_ref()
+                .map(|h| h.path.clone());
+            if want_path != current_path {
+                // State changed — close any open file and open the new one.
+                if let Some(mut f) = current_file.take() {
+                    let _ = f.flush().await;
+                }
+                if let Some(p) = &want_path {
+                    if let Some(parent) = std::path::Path::new(p).parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    match File::create(p).await {
+                        Ok(f) => current_file = Some(f),
+                        Err(e) => {
+                            eprintln!("[radio-engine] could not open recording {}: {}", p, e);
+                        }
+                    }
+                }
+                current_path = want_path;
+            }
+            if let Some(f) = current_file.as_mut() {
+                let _ = f.write_all(&chunk).await;
+            }
         }
     }
 }
@@ -1423,13 +1646,26 @@ async fn admin_record_start(State(state): State<EngineState>) -> Response {
         started_at: now,
     });
     println!("[radio-engine] recording started -> {}", path.display());
-    Redirect::to("/admin/radio").into_response()
+    Redirect::to("/admin/radio-engine/radio").into_response()
 }
 
 async fn admin_record_stop(State(state): State<EngineState>) -> Response {
     *state.recording.write().expect("recording poisoned") = None;
     println!("[radio-engine] recording stopped");
-    Redirect::to("/admin/radio").into_response()
+    Redirect::to("/admin/radio-engine/radio").into_response()
+}
+
+async fn admin_autodj_pause(State(state): State<EngineState>) -> Response {
+    state.autodj_paused.store(true, Ordering::SeqCst);
+    *state.now_playing.write().expect("np poisoned") = None;
+    println!("[radio-engine] AutoDJ paused");
+    Redirect::to("/admin/radio-engine/radio").into_response()
+}
+
+async fn admin_autodj_resume(State(state): State<EngineState>) -> Response {
+    state.autodj_paused.store(false, Ordering::SeqCst);
+    println!("[radio-engine] AutoDJ resumed");
+    Redirect::to("/admin/radio-engine/radio").into_response()
 }
 
 pub(crate) fn push_history(state: &EngineState, entry: NowPlaying) {
@@ -1516,7 +1752,10 @@ async fn stream_track(state: &EngineState, track: &Track) {
     use tokio::io::AsyncReadExt;
     let mut buf = vec![0u8; bytes_per_chunk];
     loop {
-        if state.source_alive.load(Ordering::SeqCst) || state.relay_alive.load(Ordering::SeqCst) {
+        if state.autodj_paused.load(Ordering::SeqCst)
+            || state.source_alive.load(Ordering::SeqCst)
+            || state.relay_alive.load(Ordering::SeqCst)
+        {
             let _ = child.kill().await;
             break;
         }
@@ -1549,7 +1788,10 @@ async fn stream_track_raw_pacing(state: &EngineState, track: &Track) {
     let chunk_period = Duration::from_millis(1000 / chunks_per_sec);
     let mut buf = vec![0u8; bytes_per_chunk as usize];
     loop {
-        if state.source_alive.load(Ordering::SeqCst) || state.relay_alive.load(Ordering::SeqCst) {
+        if state.autodj_paused.load(Ordering::SeqCst)
+            || state.source_alive.load(Ordering::SeqCst)
+            || state.relay_alive.load(Ordering::SeqCst)
+        {
             break;
         }
         let n = match file.read(&mut buf).await {
@@ -1605,4 +1847,59 @@ fn render<T: Template>(tmpl: T) -> Response {
         Ok(html) => Html(html).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+fn format_seconds(s: u64) -> String {
+    let h = s / 3600;
+    let m = (s % 3600) / 60;
+    let sec = s % 60;
+    if h > 0 {
+        format!("{:02}:{:02}:{:02}", h, m, sec)
+    } else {
+        format!("{:02}:{:02}", m, sec)
+    }
+}
+
+fn format_unix(ts: u64) -> String {
+    let (y, mo, d, h, mi) = unix_to_ymdhm(ts);
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", y, mo, d, h, mi)
+}
+
+fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
+    let minutes_total = secs / 60;
+    let hours_total = minutes_total / 60;
+    let days_since_epoch = (hours_total / 24) as u32;
+    let minute = (minutes_total % 60) as u32;
+    let hour = (hours_total % 24) as u32;
+    let mut year = 1970u32;
+    let mut days_remaining = days_since_epoch;
+    loop {
+        let in_year = if is_leap(year) { 366 } else { 365 };
+        if days_remaining < in_year {
+            break;
+        }
+        days_remaining -= in_year;
+        year += 1;
+    }
+    let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = if is_leap(year) {
+        months_leap
+    } else {
+        months_normal
+    };
+    let mut month = 1u32;
+    for &len in &months {
+        if days_remaining < len {
+            break;
+        }
+        days_remaining -= len;
+        month += 1;
+    }
+    let day = days_remaining + 1;
+    (year, month, day, hour, minute)
+}
+
+fn is_leap(y: u32) -> bool {
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }

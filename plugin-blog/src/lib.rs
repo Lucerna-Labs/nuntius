@@ -22,10 +22,10 @@ use ccc_core::{
     AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError, PluginLifecycle, PluginStatus,
 };
 use ccc_database::{BlogPost, CccDB, PostStatus};
+use ccc_plugin_utils::{format_unix, relative_time, unix_now};
 use serde::Deserialize;
 use std::any::Any;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Default)]
 pub struct StaticBlogPlugin;
@@ -47,6 +47,9 @@ impl Plugin for StaticBlogPlugin {
     }
     fn icon(&self) -> &'static str {
         "icon-blog"
+    }
+    fn admin_url(&self) -> String {
+        "/admin/blog/posts".into()
     }
 
     fn status(&self, ctx: &AppContext) -> PluginStatus {
@@ -82,7 +85,7 @@ impl Plugin for StaticBlogPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         println!("Initializing Blog Plugin (DB-backed posts + markdown).");
         Ok(())
     }
@@ -408,88 +411,4 @@ fn render_markdown(input: &str) -> String {
     let mut buf = String::with_capacity(input.len() + input.len() / 4);
     html::push_html(&mut buf, parser);
     buf
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn relative_time(ts: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let diff = now.saturating_sub(ts);
-    if diff < 60 {
-        "just now".into()
-    } else if diff < 3600 {
-        format!("{}m ago", diff / 60)
-    } else if diff < 86_400 {
-        format!("{}h ago", diff / 3600)
-    } else if diff < 2_592_000 {
-        format!("{}d ago", diff / 86_400)
-    } else {
-        format_unix(ts)
-    }
-}
-
-fn format_unix(ts: u64) -> String {
-    // Minimal human-friendly date — avoids pulling chrono just for this.
-    // For a real product we'd use `time` (already a transitive dep) for
-    // formatting. For now: ISO-ish UTC string.
-    use std::time::{Duration, UNIX_EPOCH};
-    let d = UNIX_EPOCH + Duration::from_secs(ts);
-    let secs_since_epoch = d.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    let (year, month, day, hour, minute) = unix_to_ymdhm(secs_since_epoch);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
-        year, month, day, hour, minute
-    )
-}
-
-/// Tiny, dependency-free Unix-seconds → (Y, M, D, h, m) for display.
-/// Good for UTC, gregorian calendar, years 1970..2099.
-fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
-    let minutes_total = secs / 60;
-    let hours_total = minutes_total / 60;
-    let days_since_epoch = (hours_total / 24) as u32;
-    let minute = (minutes_total % 60) as u32;
-    let hour = (hours_total % 24) as u32;
-
-    // Walk forward year by year from 1970.
-    let mut year = 1970u32;
-    let mut days_remaining = days_since_epoch;
-    loop {
-        let in_year = if is_leap(year) { 366 } else { 365 };
-        if days_remaining < in_year {
-            break;
-        }
-        days_remaining -= in_year;
-        year += 1;
-    }
-
-    let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) {
-        months_leap
-    } else {
-        months_normal
-    };
-    let mut month = 1u32;
-    for &len in &months {
-        if days_remaining < len {
-            break;
-        }
-        days_remaining -= len;
-        month += 1;
-    }
-    let day = days_remaining + 1;
-    (year, month, day, hour, minute)
-}
-
-fn is_leap(y: u32) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }

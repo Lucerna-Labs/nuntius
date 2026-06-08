@@ -28,7 +28,7 @@ enabled = [
     "newsletter",
     "seo",
     "analytics",
-    "patreon",
+    "bridge",
     "ads",
 ]
 

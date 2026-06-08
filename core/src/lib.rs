@@ -1,9 +1,8 @@
-//! Core functionality for the Creator Command Center (CCC) Rust rewrite.
+//! Core functionality for the Nuntius (CCC) Rust rewrite.
 //!
 //! This crate contains the essential building blocks of the application,
 //! including the plugin architecture, fundamental data structures, and traits.
 
-pub mod activitypub;
 pub mod config;
 pub mod services;
 
@@ -87,6 +86,7 @@ pub struct RailRow {
     pub primary: bool,
     pub state: PluginLifecycle,
     pub badge: Option<String>,
+    pub admin_url: String,
 }
 
 /// A sidebar entry a plugin contributes to the CMS admin shell.
@@ -142,7 +142,7 @@ impl Default for PluginStatus {
     }
 }
 
-/// A trait that all plugins must implement to hook into the Creator Command Center (CCC) core.
+/// A trait that all plugins must implement to hook into the Nuntius (CCC) core.
 ///
 /// **Lifecycle contract:** if a plugin is *disabled* in `ccc.toml`, it is
 /// never constructed — `new()` is not called, no `Plugin` value exists, no
@@ -194,10 +194,18 @@ pub trait Plugin: Send + Sync {
         false
     }
 
+    /// Canonical admin URL for this plugin — where "Open settings" /
+    /// "▸ Open" buttons in the admin shell should navigate.
+    /// Default: `/admin/{id}` which is right for most plugins. Plugins
+    /// that mount somewhere else (e.g. S3 at `/admin/storage`) override.
+    fn admin_url(&self) -> String {
+        format!("/admin/{}", self.id())
+    }
+
     /// Initialize the plugin. Called once when the plugin is registered.
     ///
     /// Set up routes, initialize state, or register extensions here.
-    fn init(&mut self) -> Result<(), PluginError>;
+    fn init(&self) -> Result<(), PluginError>;
 
     /// HTTP routes contributed by this plugin.
     ///
@@ -209,12 +217,11 @@ pub trait Plugin: Send + Sync {
 
     /// Admin-only HTTP routes contributed by this plugin.
     ///
-    /// These are *only* mounted if the `ccc-cms` plugin is enabled — that
-    /// plugin owns the admin URL prefix, the auth middleware, and the
-    /// merging of all `admin_routes()` returned here.
+    /// These are only mounted by an admin host. Public plugin routes should
+    /// use `routes()` instead.
     ///
-    /// **Security invariant:** if CMS is disabled, admin routes do not
-    /// mount, period. They never go on the wire unprotected.
+    /// **Security invariant:** admin routes do not mount unless an admin host
+    /// explicitly merges them. They never go on the wire by default.
     ///
     /// Default: no admin routes.
     fn admin_routes(&self, _ctx: &AppContext) -> Option<Router> {
@@ -278,7 +285,7 @@ impl PluginManager {
     }
 
     /// Register a new plugin. Calls `init()` and stores it.
-    pub fn register<P: Plugin + 'static>(&mut self, mut plugin: P) -> Result<(), PluginError> {
+    pub fn register<P: Plugin + 'static>(&mut self, plugin: P) -> Result<(), PluginError> {
         plugin.init()?;
         self.plugins.push(Box::new(plugin));
         Ok(())
@@ -344,6 +351,7 @@ impl PluginManager {
                     primary: p.primary(),
                     state: st.state,
                     badge: st.badge,
+                    admin_url: p.admin_url(),
                 }
             })
             .collect()

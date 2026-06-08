@@ -22,7 +22,7 @@ use ccc_database::{CccDB, PostStatus};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeoSettings {
@@ -35,7 +35,7 @@ pub struct SeoSettings {
 impl Default for SeoSettings {
     fn default() -> Self {
         Self {
-            site_name: "Creator Command Center".into(),
+            site_name: "Nuntius".into(),
             site_url: "https://example.com".into(),
             default_description: "A self-hosted creator station.".into(),
             robots_txt: "User-agent: *\nAllow: /\n".into(),
@@ -43,62 +43,10 @@ impl Default for SeoSettings {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
-struct SettingsFile {
-    seo: SeoSettings,
-}
-
-pub struct SettingsStore {
-    path: PathBuf,
-    inner: RwLock<SeoSettings>,
-}
-
-impl SettingsStore {
-    pub fn load_or_init(path: &std::path::Path) -> Result<Self, PluginError> {
-        let s = if path.exists() {
-            let raw = std::fs::read_to_string(path)
-                .map_err(|e| PluginError::InitError(format!("seo IO: {}", e)))?;
-            let parsed: SettingsFile =
-                toml::from_str(&raw).map_err(|e| PluginError::InitError(e.to_string()))?;
-            parsed.seo
-        } else {
-            SeoSettings::default()
-        };
-        let store = Self {
-            path: path.to_path_buf(),
-            inner: RwLock::new(s),
-        };
-        if !path.exists() {
-            store.persist()?;
-        }
-        Ok(store)
-    }
-
-    pub fn snapshot(&self) -> SeoSettings {
-        self.inner.read().expect("poisoned").clone()
-    }
-
-    pub fn replace(&self, new: SeoSettings) -> Result<(), PluginError> {
-        *self.inner.write().expect("poisoned") = new;
-        self.persist()
-    }
-
-    fn persist(&self) -> Result<(), PluginError> {
-        let snap = self.snapshot();
-        let file = SettingsFile { seo: snap };
-        let raw =
-            toml::to_string_pretty(&file).map_err(|e| PluginError::InitError(e.to_string()))?;
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| PluginError::InitError(format!("seo IO: {}", e)))?;
-            }
-        }
-        std::fs::write(&self.path, raw)
-            .map_err(|e| PluginError::InitError(format!("seo IO: {}", e)))?;
-        Ok(())
-    }
-}
+/// Type alias preserving the historical name. The actual storage is
+/// `TomlSidecar<SeoSettings>` from `ccc-plugin-utils`; this alias lets
+/// the rest of the file keep using `SettingsStore` unchanged.
+pub type SettingsStore = ccc_plugin_utils::TomlSidecar<SeoSettings>;
 
 // ============================================================================
 // Plugin
@@ -117,7 +65,10 @@ impl CccPluginSeoPlugin {
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("seo.toml"));
-        let store = Arc::new(SettingsStore::load_or_init(&path)?);
+        let store = Arc::new(
+            SettingsStore::load_or_init(&path)
+                .map_err(|e| PluginError::InitError(e.to_string()))?,
+        );
         Ok(Self { settings: store })
     }
 }
@@ -172,7 +123,7 @@ impl Plugin for CccPluginSeoPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         let s = self.settings.snapshot();
         println!("Initializing SEO: site={}", s.site_url);
         Ok(())

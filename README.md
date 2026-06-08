@@ -23,6 +23,86 @@ CCC is built from the ground up to minimize server strain, maximize concurrency,
 *   `ccc-api` & `ccc-cli`: The primary interfaces for interacting with the Command Center.
 *   `ccc-plugin-*`: Extensible features including Video Podcasting, Blogging, and the decentralized Store Registry.
 
+## Quick Start
+
+```bash
+# 1. Build
+cargo build --release -p ccc-cli
+
+# 2. Create a config (optional — defaults work for local dev)
+cp ccc.toml.example ccc.toml  # if you have one, otherwise the binary
+                              # creates ccc.toml on first run
+
+# 3. First boot — opens /admin/setup to create the operator account
+./target/release/ccc-cli serve
+
+# 4. Visit http://localhost:3000/admin/setup in a browser.
+#    This is the ONLY time the setup wizard is shown. After you set
+#    a password, /admin/login is the standard entry point.
+```
+
+The CLI defaults to `host = 127.0.0.1` and `port = 3000`. Override
+with `-p` or in `ccc.toml`:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 3000
+```
+
+### Health & observability
+
+* `GET /health` — liveness probe (always 200 if the process is up)
+* `GET /health/plugins` — readiness probe. Returns **200** when every
+  enabled plugin is configured, **503** with `unconfigured: [...]`
+  otherwise. Use this behind a load balancer.
+* `GET /version` — API/CLI version
+* `RUST_LOG=debug ./ccc-cli -dd serve` — structured logs via `tracing`.
+  Levels: `-d` (info), `-dd` (debug), `-ddd` (trace).
+
+### Plugins in `ccc.toml`
+
+The config file is a flat list. Each enabled plugin name in
+`[plugins] enabled` must match a known plugin:
+
+```toml
+[plugins]
+enabled = [
+    "cms",                # admin shell — required for /admin
+    "blog",
+    "podcast",
+    "video-podcast",
+    "radio-engine",
+    "analytics",
+    "bridge",
+    "seo",
+    "s3",
+    "newsletter",
+    "whisper",
+    "activitypub",
+    "store",
+    "ads",
+    "call-studio",
+    "drop",
+    "theme-dark-matter",
+]
+
+[plugin.podcast]
+# The members token gates access to the members-only feed. CHANGE
+# this before announcing your public RSS URL — anyone with the token
+# can fetch the private feed forever.
+members_token = "REPLACE_ME_WITH_A_LONG_RANDOM_STRING"
+```
+
+The `[plugin.<name>]` table is per-plugin configuration; see each
+plugin's `src/lib.rs` for the full schema. Unknown keys are ignored.
+
+### Operational scripts
+
+* `Launch-Nuntius.ps1` (Windows) — start the server in the background
+  and open `/admin` in the default browser. Falls back from CIM to
+  `Get-Process` if WMI is unavailable.
+
 ---
 
 ## License

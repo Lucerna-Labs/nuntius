@@ -26,7 +26,7 @@ use s3::{Bucket, Region};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 // ============================================================================
 // Settings
@@ -45,62 +45,10 @@ pub struct S3Settings {
     pub public_url_base: String,
 }
 
-#[derive(Default, Serialize, Deserialize)]
-struct SettingsFile {
-    s3: S3Settings,
-}
-
-pub struct SettingsStore {
-    path: PathBuf,
-    inner: RwLock<S3Settings>,
-}
-
-impl SettingsStore {
-    pub fn load_or_init(path: &std::path::Path) -> Result<Self, PluginError> {
-        let s3 = if path.exists() {
-            let raw = std::fs::read_to_string(path)
-                .map_err(|e| PluginError::InitError(format!("s3 IO: {}", e)))?;
-            let parsed: SettingsFile =
-                toml::from_str(&raw).map_err(|e| PluginError::InitError(e.to_string()))?;
-            parsed.s3
-        } else {
-            S3Settings::default()
-        };
-        let store = Self {
-            path: path.to_path_buf(),
-            inner: RwLock::new(s3),
-        };
-        if !path.exists() {
-            store.persist()?;
-        }
-        Ok(store)
-    }
-
-    pub fn snapshot(&self) -> S3Settings {
-        self.inner.read().expect("poisoned").clone()
-    }
-
-    pub fn replace(&self, new: S3Settings) -> Result<(), PluginError> {
-        *self.inner.write().expect("poisoned") = new;
-        self.persist()
-    }
-
-    fn persist(&self) -> Result<(), PluginError> {
-        let snap = self.snapshot();
-        let file = SettingsFile { s3: snap };
-        let raw =
-            toml::to_string_pretty(&file).map_err(|e| PluginError::InitError(e.to_string()))?;
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| PluginError::InitError(format!("s3 IO: {}", e)))?;
-            }
-        }
-        std::fs::write(&self.path, raw)
-            .map_err(|e| PluginError::InitError(format!("s3 IO: {}", e)))?;
-        Ok(())
-    }
-}
+/// Type alias preserving the historical name. The actual storage is
+/// `TomlSidecar<S3Settings>` from `ccc-plugin-utils`; this alias lets
+/// the rest of the file keep using `SettingsStore` unchanged.
+pub type SettingsStore = ccc_plugin_utils::TomlSidecar<S3Settings>;
 
 // ============================================================================
 // Plugin
@@ -119,7 +67,10 @@ impl CccPluginS3Plugin {
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("s3.toml"));
-        let store = Arc::new(SettingsStore::load_or_init(&path)?);
+        let store = Arc::new(
+            SettingsStore::load_or_init(&path)
+                .map_err(|e| PluginError::InitError(e.to_string()))?,
+        );
         Ok(Self { settings: store })
     }
 
@@ -217,6 +168,9 @@ impl Plugin for CccPluginS3Plugin {
     fn icon(&self) -> &'static str {
         "icon-storage"
     }
+    fn admin_url(&self) -> String {
+        "/admin/storage".into()
+    }
 
     fn status(&self, _ctx: &AppContext) -> PluginStatus {
         let s = self.settings.snapshot();
@@ -258,7 +212,7 @@ impl Plugin for CccPluginS3Plugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         let s = self.settings.snapshot();
         let configured = self.is_configured();
         println!(
@@ -309,7 +263,9 @@ impl PluginHandle {
         self.settings.snapshot()
     }
     fn replace(&self, new: S3Settings) -> Result<(), PluginError> {
-        self.settings.replace(new)
+        self.settings
+            .replace(new)
+            .map_err(|e| PluginError::InitError(e.to_string()))
     }
     async fn test_connection(&self) -> Result<String, String> {
         // Build a temporary plugin with the same settings to reuse logic.

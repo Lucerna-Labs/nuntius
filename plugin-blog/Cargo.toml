@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 ccc-core = { path = "../core" }
 ccc-database = { path = "../database" }
+ccc-plugin-utils = { path = "../ccc-plugin-utils" }
 
 axum = { version = "0.7.9", features = ["macros"] }
 askama = "0.12"

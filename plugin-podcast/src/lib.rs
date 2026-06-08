@@ -3,6 +3,7 @@
 //!
 //! Public:
 //! - GET  /podcasts/feed.xml         RSS 2.0 + iTunes namespace, only Published
+//! - GET  /podcasts/                 HTML index for published on-demand episodes
 //! - GET  /podcasts/:slug            HTML page for one episode
 //! - GET  /podcasts/download/:id     audio stream (Range-friendly via ServeFile)
 //!
@@ -28,6 +29,7 @@ use ccc_core::{
     ServiceRegistry,
 };
 use ccc_database::{CccDB, EpisodeStatus, PodcastEpisode, TranscriptionJob, TranscriptionStatus};
+use ccc_plugin_utils::{format_unix, unix_now, unix_to_ymdhm};
 use rss::{
     extension::itunes::{ITunesChannelExtensionBuilder, ITunesItemExtensionBuilder},
     ChannelBuilder, EnclosureBuilder, GuidBuilder, ItemBuilder,
@@ -36,9 +38,9 @@ use serde::Deserialize;
 use std::any::Any;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
-use tokio_util::io::ReaderStream;
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
 
 const MAX_UPLOAD_BYTES: usize = 500 * 1024 * 1024; // 500 MB
 const DEFAULT_AUDIO_DIR: &str = "./media/podcast";
@@ -110,6 +112,9 @@ impl Plugin for PodcastPlugin {
     fn icon(&self) -> &'static str {
         "icon-podcast"
     }
+    fn admin_url(&self) -> String {
+        "/admin/podcasts".into()
+    }
 
     fn status(&self, ctx: &AppContext) -> PluginStatus {
         let episodes = ctx.db.all_podcast_episodes().unwrap_or_default();
@@ -139,7 +144,7 @@ impl Plugin for PodcastPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         if let Err(e) = std::fs::create_dir_all(&self.audio_dir) {
             return Err(PluginError::InitError(format!(
                 "podcast: could not create audio dir {}: {}",
@@ -164,6 +169,7 @@ impl Plugin for PodcastPlugin {
         };
         Some(
             Router::new()
+                .route("/podcasts", get(public_index))
                 .route("/podcasts/feed.xml", get(public_feed))
                 .route("/podcasts/members.xml", get(public_members_feed))
                 .route("/podcasts/download/:id", get(public_download))
@@ -212,13 +218,68 @@ impl Plugin for PodcastPlugin {
 // Public handlers
 // ============================================================================
 
+#[derive(Template)]
+#[template(path = "public_index.html")]
+struct PublicIndexPage {
+    episodes: Vec<PublicEpisodeRow>,
+    upcoming: Vec<PublicEpisodeRow>,
+}
+
+struct PublicEpisodeRow {
+    id: u64,
+    title: String,
+    slug: String,
+    description: String,
+    duration: String,
+    published_human: String,
+}
+
+async fn public_index(State(state): State<AppState>) -> Response {
+    let published = match state.db.latest_published_podcast_episodes(100) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let episodes = published
+        .into_iter()
+        .filter(|e| !e.members_only)
+        .map(public_episode_row)
+        .collect();
+
+    let all = match state.db.all_podcast_episodes() {
+        Ok(v) => v,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let upcoming = all
+        .into_iter()
+        .filter(|e| e.status == EpisodeStatus::Draft && !e.members_only)
+        .take(6)
+        .map(public_episode_row)
+        .collect();
+
+    render(PublicIndexPage { episodes, upcoming })
+}
+
+fn public_episode_row(ep: PodcastEpisode) -> PublicEpisodeRow {
+    PublicEpisodeRow {
+        id: ep.id,
+        title: ep.title,
+        slug: ep.slug,
+        description: ep.description,
+        duration: format_seconds(ep.duration_seconds),
+        published_human: ep
+            .published_at
+            .map(format_unix)
+            .unwrap_or_else(|| "Coming soon".into()),
+    }
+}
+
 async fn public_feed(State(state): State<AppState>) -> Response {
     let raw = match state.db.latest_published_podcast_episodes(50) {
         Ok(v) => v,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     let episodes: Vec<_> = raw.into_iter().filter(|e| !e.members_only).collect();
-    build_feed_response("Creator Command Center Podcast", &episodes)
+    build_feed_response("Nuntius Podcast", &episodes)
 }
 
 #[derive(Deserialize)]
@@ -238,13 +299,13 @@ async fn public_members_feed(
         Ok(v) => v,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    build_feed_response("Creator Command Center Podcast (Members)", &episodes)
+    build_feed_response("Nuntius Podcast (Members)", &episodes)
 }
 
 /// Members are admitted if EITHER:
 /// - the request carries the configured shared `?token=...`, OR
-/// - the Patreon plugin is enabled and the request's cookie identifies
-///   an active patron (verified signature, active membership).
+/// - a membership provider is active and the request identifies an active
+///   member (verified signature, active membership).
 fn members_authorized(
     state: &AppState,
     q: &MembersFeedQuery,
@@ -302,10 +363,10 @@ fn build_feed_response(title: &str, episodes: &[ccc_database::PodcastEpisode]) -
     let channel = ChannelBuilder::default()
         .title(title)
         .link("/podcasts/feed.xml")
-        .description("Episodes published from this Creator Command Center.")
+        .description("Episodes published from this Nuntius.")
         .itunes_ext(Some(
             ITunesChannelExtensionBuilder::default()
-                .author(Some("Creator Command Center".into()))
+                .author(Some("Nuntius".into()))
                 .build(),
         ))
         .items(items)
@@ -358,18 +419,27 @@ async fn public_download(
     if ep.members_only && !members_authorized(&state, &q, &headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let file = match tokio::fs::File::open(&ep.audio_path).await {
-        Ok(f) => f,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
-    let headers = [
-        (header::CONTENT_TYPE, ep.mime_type.clone()),
-        (header::ACCEPT_RANGES, "bytes".into()),
-        (header::CONTENT_LENGTH, ep.size_bytes.to_string()),
-    ];
-    (headers, body).into_response()
+    // Hand the file off to tower_http::ServeFile, which handles
+    // `Range: bytes=...` requests (returning 206 Partial Content with
+    // Content-Range), If-Range revalidation, and HEAD correctly. This
+    // matters for episodes that can be hundreds of MB: without Range
+    // support a mobile client buffering over a flaky connection has to
+    // pull the whole file before playback starts.
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let mut req = axum::http::Request::builder()
+        .method(axum::http::Method::GET)
+        .header(header::CONTENT_TYPE, ep.mime_type.clone());
+    if let Some(r) = range {
+        req = req.header(header::RANGE, r);
+    }
+    let req = req.body(Body::empty()).unwrap();
+    match ServeFile::new(&ep.audio_path).oneshot(req).await {
+        Ok(resp) => resp.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 // ============================================================================
@@ -511,7 +581,10 @@ async fn admin_create(State(state): State<AppState>, mut multipart: Multipart) -
     }
 
     let mut episode = PodcastEpisode {
-        id: now,
+        id: match state.db.next_id("podcast_episode") {
+            Ok(id) => id,
+            Err(e) => return new_form_error(&format!("Could not allocate episode id: {e}")),
+        },
         slug,
         title,
         description,
@@ -531,7 +604,10 @@ async fn admin_create(State(state): State<AppState>, mut multipart: Multipart) -
     // at the just-saved file. Whisper plugin's worker will pick it up.
     if queue_transcription {
         let job = TranscriptionJob {
-            id: now + 1, // distinct from episode id; same timeline
+            id: match state.db.next_id("transcription_job") {
+                Ok(id) => id,
+                Err(e) => return new_form_error(&format!("Could not allocate job id: {e}")),
+            },
             audio_path: episode.audio_path.clone(),
             status: TranscriptionStatus::Queued,
             language: "auto".into(),
@@ -731,18 +807,6 @@ fn format_duration(seconds: u64) -> String {
     }
 }
 
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn format_unix(ts: u64) -> String {
-    let (y, mo, d, h, mi) = unix_to_ymdhm(ts);
-    format!("{:04}-{:02}-{:02} {:02}:{:02}", y, mo, d, h, mi)
-}
-
 fn rfc2822_utc(ts: u64) -> String {
     let (y, mo, d, h, mi) = unix_to_ymdhm(ts);
     let s = (ts % 60) as u32;
@@ -789,47 +853,13 @@ fn month_short(m: u32) -> &'static str {
         9 => "Sep",
         10 => "Oct",
         11 => "Nov",
-        _ => "Dec",
+        12 => "Dec",
+        // Months outside 1..=12 are a programmer error — the calling
+        // site should be passing a value from `unix_to_ymdhm`, which
+        // always returns 1..=12. Fall through to a clear sentinel
+        // rather than silently mis-rendering as "Dec".
+        _ => "???",
     }
-}
-
-fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
-    let minutes_total = secs / 60;
-    let hours_total = minutes_total / 60;
-    let days_since_epoch = (hours_total / 24) as u32;
-    let minute = (minutes_total % 60) as u32;
-    let hour = (hours_total % 24) as u32;
-    let mut year = 1970u32;
-    let mut days_remaining = days_since_epoch;
-    loop {
-        let in_year = if is_leap(year) { 366 } else { 365 };
-        if days_remaining < in_year {
-            break;
-        }
-        days_remaining -= in_year;
-        year += 1;
-    }
-    let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) {
-        months_leap
-    } else {
-        months_normal
-    };
-    let mut month = 1u32;
-    for &len in &months {
-        if days_remaining < len {
-            break;
-        }
-        days_remaining -= len;
-        month += 1;
-    }
-    let day = days_remaining + 1;
-    (year, month, day, hour, minute)
-}
-
-fn is_leap(y: u32) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 fn format_seconds(s: u64) -> String {
@@ -840,5 +870,54 @@ fn format_seconds(s: u64) -> String {
         format!("{:02}:{:02}:{:02}", h, m, sec)
     } else {
         format!("{:02}:{:02}", m, sec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weekday_short_known_dates() {
+        // Reference dates (weekday is deterministic).
+        assert_eq!(weekday_short(1970, 1, 1), "Thu"); // Unix epoch
+        assert_eq!(weekday_short(2000, 1, 1), "Sat");
+        assert_eq!(weekday_short(2024, 2, 29), "Thu"); // leap day
+        assert_eq!(weekday_short(2025, 1, 1), "Wed");
+    }
+
+    #[test]
+    fn weekday_short_zellers_century_boundary() {
+        // 2100-01-01 is a Friday, NOT a leap year (the bug the local
+        // unix_to_ymdhm had before we replaced it with the Hinnant
+        // algorithm). Pin the weekday computation to a known value
+        // so this can never silently regress.
+        assert_eq!(weekday_short(2100, 1, 1), "Fri");
+        assert_eq!(weekday_short(2000, 1, 1), "Sat"); // 2000 IS a leap year
+    }
+
+    #[test]
+    fn month_short_all_twelve() {
+        let months = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        for (i, expected) in months.iter().enumerate() {
+            assert_eq!(month_short(i as u32 + 1), *expected);
+        }
+        // Out-of-range months produce a sentinel rather than silently
+        // rendering as "Dec" — caller is a programmer error.
+        assert_eq!(month_short(13), "???");
+        assert_eq!(month_short(0), "???");
+    }
+
+    #[test]
+    fn rfc2822_utc_format() {
+        // 2024-01-15 12:34:56 UTC == 1705322096
+        assert_eq!(
+            rfc2822_utc(1_705_322_096),
+            "Mon, 15 Jan 2024 12:34:56 +0000"
+        );
+        // Epoch
+        assert_eq!(rfc2822_utc(0), "Thu, 01 Jan 1970 00:00:00 +0000");
     }
 }

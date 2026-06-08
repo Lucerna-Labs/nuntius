@@ -19,7 +19,7 @@ impl Plugin for CccPluginThemeDarkMatterPlugin {
         "0.1.0"
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         println!("Initializing {}...", self.name());
         Ok(())
     }

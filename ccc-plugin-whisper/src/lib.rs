@@ -24,7 +24,7 @@ use ccc_database::{CccDB, TranscriptionJob, TranscriptionStatus};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // ============================================================================
@@ -50,63 +50,9 @@ impl Default for WhisperSettings {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
-struct SettingsFile {
-    whisper: WhisperSettings,
-}
-
-pub struct SettingsStore {
-    path: PathBuf,
-    inner: RwLock<WhisperSettings>,
-}
-
-impl SettingsStore {
-    pub fn load_or_init(path: &std::path::Path) -> Result<Self, PluginError> {
-        let whisper = if path.exists() {
-            let raw = std::fs::read_to_string(path).map_err(io_err)?;
-            let parsed: SettingsFile =
-                toml::from_str(&raw).map_err(|e| PluginError::InitError(e.to_string()))?;
-            parsed.whisper
-        } else {
-            WhisperSettings::default()
-        };
-        let store = Self {
-            path: path.to_path_buf(),
-            inner: RwLock::new(whisper),
-        };
-        if !path.exists() {
-            store.persist()?;
-        }
-        Ok(store)
-    }
-
-    pub fn snapshot(&self) -> WhisperSettings {
-        self.inner.read().expect("poisoned").clone()
-    }
-
-    pub fn replace(&self, new: WhisperSettings) -> Result<(), PluginError> {
-        *self.inner.write().expect("poisoned") = new;
-        self.persist()
-    }
-
-    fn persist(&self) -> Result<(), PluginError> {
-        let snap = self.snapshot();
-        let file = SettingsFile { whisper: snap };
-        let raw =
-            toml::to_string_pretty(&file).map_err(|e| PluginError::InitError(e.to_string()))?;
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(io_err)?;
-            }
-        }
-        std::fs::write(&self.path, raw).map_err(io_err)?;
-        Ok(())
-    }
-}
-
-fn io_err(e: std::io::Error) -> PluginError {
-    PluginError::InitError(format!("whisper IO: {}", e))
-}
+/// Type alias preserving the historical name. The actual storage is
+/// `TomlSidecar<WhisperSettings>` from `ccc-plugin-utils`.
+pub type SettingsStore = ccc_plugin_utils::TomlSidecar<WhisperSettings>;
 
 /// Best-effort check that the configured whisper binary is on PATH.
 fn binary_available(name: &str) -> bool {
@@ -137,7 +83,10 @@ impl CccPluginWhisperPlugin {
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("whisper.toml"));
-        let store = Arc::new(SettingsStore::load_or_init(&path)?);
+        let store = Arc::new(
+            SettingsStore::load_or_init(&path)
+                .map_err(|e| PluginError::InitError(e.to_string()))?,
+        );
         Ok(Self { settings: store })
     }
 }
@@ -159,6 +108,9 @@ impl Plugin for CccPluginWhisperPlugin {
     }
     fn icon(&self) -> &'static str {
         "icon-transcript"
+    }
+    fn admin_url(&self) -> String {
+        "/admin/transcripts".into()
     }
 
     fn status(&self, _ctx: &AppContext) -> PluginStatus {
@@ -183,7 +135,7 @@ impl Plugin for CccPluginWhisperPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         let snap = self.settings.snapshot();
         let avail = binary_available(&snap.binary);
         println!(

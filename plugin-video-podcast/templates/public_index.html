@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video - Nuntius</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+  <style>
+    body.cms { background:#0f1318; color:#e8edf2; }
+    .site { max-width:1080px; margin:0 auto; padding:34px 20px 70px; }
+    .top { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:28px; }
+    .nav { display:flex; gap:10px; flex-wrap:wrap; }
+    .nav a { color:#dce6ee; text-decoration:none; border:1px solid rgba(255,255,255,.12); padding:8px 12px; border-radius:6px; }
+    h1 { margin:0; font-size:34px; letter-spacing:0; }
+    .lede { color:#9aa7b5; max-width:680px; margin:10px 0 0; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; margin-top:18px; }
+    .card { background:#151b22; border:1px solid #25313d; border-radius:8px; padding:16px; min-height:150px; }
+    .thumb { aspect-ratio:16/9; border-radius:6px; background:linear-gradient(135deg,#202b36,#11151b); display:grid; place-items:center; color:#7f8d9c; margin-bottom:14px; }
+    .card h3 { margin:0 0 8px; font-size:19px; }
+    .card p { color:#aab6c2; margin:8px 0 0; }
+    .meta { color:#7f8d9c; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+    .section { margin-top:34px; }
+    .empty { color:#9aa7b5; border:1px dashed #34414f; border-radius:8px; padding:18px; }
+  </style>
+</head>
+<body class="cms">
+  <main class="site">
+    <div class="top">
+      <div>
+        <h1>Video</h1>
+        <p class="lede">On-demand video episodes from Nuntius.</p>
+      </div>
+      <nav class="nav">
+        <a href="/">Station</a>
+        <a href="/radio">Live radio</a>
+        <a href="/podcasts">Podcasts</a>
+      </nav>
+    </div>
+
+    <section class="section">
+      <div class="grid">
+        {% for v in videos %}
+          <article class="card">
+            <a class="thumb" href="/videos/{{ v.slug }}">Play video</a>
+            <div class="meta">{{ v.published_human }}{% if v.duration != "00:00" %} / {{ v.duration }}{% endif %}</div>
+            <h3><a href="/videos/{{ v.slug }}">{{ v.title }}</a></h3>
+            <p>{{ v.description }}</p>
+          </article>
+        {% endfor %}
+      </div>
+      {% if videos.is_empty() %}
+        <div class="empty">No public videos have been published yet.</div>
+      {% endif %}
+    </section>
+
+    <section class="section">
+      <h2>Upcoming</h2>
+      <div class="grid">
+        {% for v in upcoming %}
+          <article class="card">
+            <div class="thumb">{{ v.status }}</div>
+            <div class="meta">Coming soon</div>
+            <h3>{{ v.title }}</h3>
+            <p>{{ v.description }}</p>
+          </article>
+        {% endfor %}
+      </div>
+      {% if upcoming.is_empty() %}
+        <div class="empty">No upcoming video previews yet.</div>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

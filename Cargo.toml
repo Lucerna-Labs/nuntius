@@ -1,11 +1,31 @@
 [workspace]
 
 members = [
+    # Core platform
     "core",
     "api",
     "cli",
     "ccc-cms",
-    "plugin-blog", "radio-engine", "database", "plugin-podcast", "plugin-video-podcast", "plugin-store", "ccc-plugin-newsletter", "ccc-plugin-seo", "ccc-plugin-analytics", "ccc-plugin-theme-dark-matter", "ccc-plugin-activitypub", "ccc-plugin-patreon", "ccc-plugin-ads", "ccc-plugin-whisper", "ccc-plugin-s3", "ccc-plugin-call-studio", "ccc-plugin-drop",
+    "database",
+    "radio-engine",
+    # Shared plugin helpers (no business logic of its own)
+    "ccc-plugin-utils",
+    # Plugins
+    "plugin-blog",
+    "plugin-podcast",
+    "plugin-video-podcast",
+    "plugin-store",
+    "ccc-plugin-activitypub",
+    "ccc-plugin-ads",
+    "ccc-plugin-analytics",
+    "ccc-plugin-bridge",
+    "ccc-plugin-call-studio",
+    "ccc-plugin-drop",
+    "ccc-plugin-newsletter",
+    "ccc-plugin-s3",
+    "ccc-plugin-seo",
+    "ccc-plugin-theme-dark-matter",
+    "ccc-plugin-whisper",
 ]
 
 resolver = "2"

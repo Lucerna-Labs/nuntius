@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Podcasts - Nuntius</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+  <style>
+    body.cms { background:#0f1318; color:#e8edf2; }
+    .site { max-width:1080px; margin:0 auto; padding:34px 20px 70px; }
+    .top { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:28px; }
+    .nav { display:flex; gap:10px; flex-wrap:wrap; }
+    .nav a { color:#dce6ee; text-decoration:none; border:1px solid rgba(255,255,255,.12); padding:8px 12px; border-radius:6px; }
+    h1 { margin:0; font-size:34px; letter-spacing:0; }
+    .lede { color:#9aa7b5; max-width:680px; margin:10px 0 0; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; margin-top:18px; }
+    .card { background:#151b22; border:1px solid #25313d; border-radius:8px; padding:16px; }
+    .card h3 { margin:0 0 8px; font-size:19px; }
+    .card p { color:#aab6c2; margin:8px 0 0; }
+    .meta { color:#7f8d9c; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+    .card audio { width:100%; margin-top:14px; }
+    .section { margin-top:34px; }
+    .empty { color:#9aa7b5; border:1px dashed #34414f; border-radius:8px; padding:18px; }
+  </style>
+</head>
+<body class="cms">
+  <main class="site">
+    <div class="top">
+      <div>
+        <h1>Podcasts</h1>
+        <p class="lede">On-demand audio from Nuntius. Listen here or subscribe with the RSS feed.</p>
+      </div>
+      <nav class="nav">
+        <a href="/">Station</a>
+        <a href="/radio">Live radio</a>
+        <a href="/videos">Video</a>
+        <a href="/podcasts/feed.xml">RSS</a>
+      </nav>
+    </div>
+
+    <section class="section">
+      <div class="grid">
+        {% for ep in episodes %}
+          <article class="card">
+            <div class="meta">{{ ep.published_human }}{% if ep.duration != "00:00" %} / {{ ep.duration }}{% endif %}</div>
+            <h3><a href="/podcasts/{{ ep.slug }}">{{ ep.title }}</a></h3>
+            <p>{{ ep.description }}</p>
+            <audio controls preload="metadata" src="/podcasts/download/{{ ep.id }}"></audio>
+          </article>
+        {% endfor %}
+      </div>
+      {% if episodes.is_empty() %}
+        <div class="empty">No public podcast episodes have been published yet.</div>
+      {% endif %}
+    </section>
+
+    <section class="section">
+      <h2>Upcoming</h2>
+      <div class="grid">
+        {% for ep in upcoming %}
+          <article class="card">
+            <div class="meta">Coming soon</div>
+            <h3>{{ ep.title }}</h3>
+            <p>{{ ep.description }}</p>
+          </article>
+        {% endfor %}
+      </div>
+      {% if upcoming.is_empty() %}
+        <div class="empty">No upcoming podcast previews yet.</div>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

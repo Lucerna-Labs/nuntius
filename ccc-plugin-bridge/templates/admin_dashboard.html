@@ -1,0 +1,64 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Bridge - Nuntius{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Bridge rendezvous</h1>
+  <p class="cms-page__lede">Content-blind WebRTC signaling for short-lived bridge sessions.</p>
+  <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+    <a class="cms-btn cms-btn--primary" href="/bridge/worker" target="_blank" style="display:inline-flex; align-items:center; padding:10px 16px;">Open worker</a>
+    <a class="cms-btn" href="/bridge/client" target="_blank" style="display:inline-flex; align-items:center; padding:10px 16px;">Open client</a>
+    <a class="cms-btn" href="/bridge/lab" target="_blank" style="display:inline-flex; align-items:center; padding:10px 16px;">Run lab</a>
+  </div>
+</header>
+
+<section class="cms-grid" style="margin-bottom: 24px;">
+  <div class="cms-tile" style="cursor: default;">
+    <span class="cms-tile__label">Active bridges</span>
+    <span class="cms-tile__value">{{ active_bridges }}</span>
+  </div>
+  <div class="cms-tile" style="cursor: default;">
+    <span class="cms-tile__label">Active sessions</span>
+    <span class="cms-tile__value">{{ active_sessions }}</span>
+  </div>
+  <div class="cms-tile" style="cursor: default;">
+    <span class="cms-tile__label">Bridge TTL</span>
+    <span class="cms-tile__value">{{ bridge_ttl_secs }}s</span>
+  </div>
+  <div class="cms-tile" style="cursor: default;">
+    <span class="cms-tile__label">Session TTL</span>
+    <span class="cms-tile__value">{{ session_ttl_secs }}s</span>
+  </div>
+</section>
+
+<section class="cms-section">
+  <h2>Public signaling endpoints</h2>
+  <table class="cms-table">
+    <tbody>
+      <tr><td><code>GET</code></td><td><code>/api/bridge/status</code></td></tr>
+      <tr><td><code>GET</code></td><td><code>/bridge/worker</code></td></tr>
+      <tr><td><code>GET</code></td><td><code>/bridge/client</code></td></tr>
+      <tr><td><code>GET</code></td><td><code>/bridge/lab</code></td></tr>
+      <tr><td><code>POST</code></td><td><code>/api/bridge/advertise</code></td></tr>
+      <tr><td><code>GET</code></td><td><code>/api/bridge/bridges</code></td></tr>
+      <tr><td><code>POST</code></td><td><code>/api/bridge/sessions</code></td></tr>
+      <tr><td><code>GET/POST</code></td><td><code>/api/bridge/sessions/:id/answer</code></td></tr>
+      <tr><td><code>GET/POST</code></td><td><code>/api/bridge/sessions/:id/client-ice</code></td></tr>
+      <tr><td><code>GET/POST</code></td><td><code>/api/bridge/sessions/:id/bridge-ice</code></td></tr>
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h2>Doctrine</h2>
+  <ul class="cms-rail__list">
+    <li>Opt-in bridge participation.</li>
+    <li>Encrypted peer traffic only.</li>
+    <li>Broker stores only short-lived SDP/ICE.</li>
+    <li>No payload logging.</li>
+  </ul>
+</div>
+{% endblock %}

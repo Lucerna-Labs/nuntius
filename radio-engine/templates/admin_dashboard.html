@@ -1,6 +1,6 @@
 {% extends "_admin_layout.html" %}
 
-{% block title %}Studio — Radio — Creator Command Center{% endblock %}
+{% block title %}Studio — Radio — Nuntius{% endblock %}
 
 {% block content %}
 {% include "_radio_tabs.html" %}
@@ -228,6 +228,15 @@
   </section>
 
   <section class="transport">
+    <form class="tt-form" method="post" action="{% if autodj_paused %}/admin/radio/autodj/resume{% else %}/admin/radio/autodj/pause{% endif %}">
+      <button type="submit" class="tt {% if autodj_paused %}is-active{% endif %}" title="Toggle AutoDJ">
+        <span class="tt__icon">■</span>
+        <span class="tt__text">
+          <span class="tt__label">{% if autodj_paused %}AutoDJ paused — click to resume{% else %}Stop AutoDJ{% endif %}</span>
+          <span class="tt__sub">{% if autodj_paused %}Station is silent until resumed{% else %}Silence the station without deleting tracks{% endif %}</span>
+        </span>
+      </button>
+    </form>
     <form class="tt-form" method="post" action="{% match recording_path %}{% when Some with (_) %}/admin/radio/record/stop{% when None %}/admin/radio/record/start{% endmatch %}">
       <button type="submit" class="tt {% match recording_path %}{% when Some with (_) %}is-active{% when None %}{% endmatch %}" title="Toggle recording">
         <span class="tt__icon">⏺</span>

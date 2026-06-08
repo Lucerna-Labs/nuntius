@@ -30,7 +30,7 @@ use lettre::{AsyncTransport, Tokio1Executor};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ============================================================================
@@ -63,69 +63,16 @@ impl Default for NewsletterSettings {
             username: String::new(),
             password: String::new(),
             from_email: String::new(),
-            from_name: "Creator Command Center".into(),
+            from_name: "Nuntius".into(),
             auto_send_blog_posts: false,
             site_url: String::new(),
         }
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
-struct SettingsFile {
-    newsletter: NewsletterSettings,
-}
-
-pub struct SettingsStore {
-    path: PathBuf,
-    inner: RwLock<NewsletterSettings>,
-}
-
-impl SettingsStore {
-    pub fn load_or_init(path: &std::path::Path) -> Result<Self, PluginError> {
-        let nl = if path.exists() {
-            let raw = std::fs::read_to_string(path)
-                .map_err(|e| PluginError::InitError(format!("newsletter IO: {}", e)))?;
-            let parsed: SettingsFile =
-                toml::from_str(&raw).map_err(|e| PluginError::InitError(e.to_string()))?;
-            parsed.newsletter
-        } else {
-            NewsletterSettings::default()
-        };
-        let store = Self {
-            path: path.to_path_buf(),
-            inner: RwLock::new(nl),
-        };
-        if !path.exists() {
-            store.persist()?;
-        }
-        Ok(store)
-    }
-
-    pub fn snapshot(&self) -> NewsletterSettings {
-        self.inner.read().expect("poisoned").clone()
-    }
-
-    pub fn replace(&self, new: NewsletterSettings) -> Result<(), PluginError> {
-        *self.inner.write().expect("poisoned") = new;
-        self.persist()
-    }
-
-    fn persist(&self) -> Result<(), PluginError> {
-        let snap = self.snapshot();
-        let file = SettingsFile { newsletter: snap };
-        let raw =
-            toml::to_string_pretty(&file).map_err(|e| PluginError::InitError(e.to_string()))?;
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| PluginError::InitError(format!("newsletter IO: {}", e)))?;
-            }
-        }
-        std::fs::write(&self.path, raw)
-            .map_err(|e| PluginError::InitError(format!("newsletter IO: {}", e)))?;
-        Ok(())
-    }
-}
+/// Type alias preserving the historical name. The actual storage is
+/// `TomlSidecar<NewsletterSettings>` from `ccc-plugin-utils`.
+pub type SettingsStore = ccc_plugin_utils::TomlSidecar<NewsletterSettings>;
 
 // ============================================================================
 // Plugin
@@ -144,7 +91,10 @@ impl CccPluginNewsletterPlugin {
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("newsletter.toml"));
-        let store = Arc::new(SettingsStore::load_or_init(&path)?);
+        let store = Arc::new(
+            SettingsStore::load_or_init(&path)
+                .map_err(|e| PluginError::InitError(e.to_string()))?,
+        );
         Ok(Self { settings: store })
     }
 }
@@ -202,7 +152,7 @@ impl Plugin for CccPluginNewsletterPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         let snap = self.settings.snapshot();
         let configured = !snap.host.is_empty() && !snap.from_email.is_empty();
         println!(

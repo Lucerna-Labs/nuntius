@@ -6,10 +6,12 @@ edition = "2021"
 [dependencies]
 ccc-core = { path = "../core" }
 ccc-database = { path = "../database" }
+ccc-plugin-utils = { path = "../ccc-plugin-utils" }
 tokio = { version = "1.0", features = ["full"] }
 axum = { version = "0.7.9", features = ["macros", "multipart"] }
 rss = "2.0"
 tower-http = { version = "0.5", features = ["fs"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio-util = { version = "0.7.18", features = ["io"] }

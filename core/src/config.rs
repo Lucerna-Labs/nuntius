@@ -1,4 +1,4 @@
-//! Configuration schema for the Creator Command Center (CCC).
+//! Configuration schema for the Nuntius (CCC).
 //!
 //! `ccc.toml` is the single source of truth for which plugins are *enabled*.
 //! Disabled plugins are never instantiated — see the `Plugin` trait docs.

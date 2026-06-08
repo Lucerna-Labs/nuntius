@@ -22,6 +22,12 @@ const API = {
     if (!r.ok) return [];
     return r.json();
   },
+  setAutoDjPaused: async (paused) => {
+    const path = paused ? '/admin/radio/autodj/pause' : '/admin/radio/autodj/resume';
+    const r = await fetch(path, { method: 'POST', credentials: 'same-origin' });
+    if (!r.ok) throw new Error('autodj ' + r.status);
+    return true;
+  },
 };
 
 const ICONS = {
@@ -38,6 +44,7 @@ const ICONS = {
   'icon-heart':      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`,
   'icon-megaphone':  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m3 11 18-5v12L3 13zM11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>`,
   'icon-storage':    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`,
+  'icon-bridge':     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 8a6 6 0 0 1 12 0v3M4 11h16v9H4zM9 15h6"/></svg>`,
 };
 const iconHtml = (k) => ICONS[k] || `<span class="mono">${(k||'?').slice(5,7).toUpperCase()}</span>`;
 
@@ -150,6 +157,7 @@ function renderPluginView(p, d) {
     case 'whisper':       return renderWhisper(d);
     case 'seo':           return renderSeo(d);
     case 'analytics':     return renderAnalytics(d);
+    case 'bridge':        return renderBridge(d);
     case 'ads':           return renderAds(d);
     default:              return renderGeneric(p, d);
   }
@@ -387,6 +395,26 @@ function renderAnalytics(d) {
     </div>`;
 }
 
+function renderBridge(d) {
+  return `
+    <div class="status-card ok">
+      <div class="status-row">
+        <div><div class="status-label">Rendezvous</div><div class="status-value">${d.active_bridges || 0} bridges · ${d.active_sessions || 0} sessions</div></div>
+        <div class="status-pill ok">Content-blind</div>
+      </div>
+    </div>
+    <div class="section-head"><span><span class="num">01</span>Doctrine</span></div>
+    <div class="field-grid two">
+      <div class="field"><div class="lbl">Payload logging</div><div class="val">${d.logs_payloads ? 'on' : 'off'}</div></div>
+      <div class="field"><div class="lbl">Encrypted traffic</div><div class="val">${d.content_blind ? 'required' : 'unknown'}</div></div>
+      <div class="field"><div class="lbl">Bridge TTL</div><div class="val">${d.bridge_ttl_secs || 0}s</div></div>
+      <div class="field"><div class="lbl">Session TTL</div><div class="val">${d.session_ttl_secs || 0}s</div></div>
+    </div>
+    <div class="action-row">
+      <a class="act-btn primary" href="/admin/bridge">Open bridge</a>
+    </div>`;
+}
+
 function renderAds(d) {
   return `
     <div class="status-card ok">
@@ -527,6 +555,7 @@ const rels = {
   scheduleList: $('scheduleList'), masterL: $('masterL'), masterR: $('masterR'),
   streamAudio: $('streamAudio'),
   icecastStatus: $('icecastStatus'),
+  autoState: $('autoState'), autoDjToggle: $('autoDjToggle'), footerAutoDjToggle: $('footerAutoDjToggle'),
   chatMsgs: $('chatMsgs'),
 };
 function $(id) { return document.getElementById(id); }
@@ -534,6 +563,7 @@ function $(id) { return document.getElementById(id); }
 const rstate = {
   onAir: false, started_at: 0, duration: 0, last_now_unix: 0, last_now_ts_local: 0,
   uptimeStart: null, peakListeners: 0,
+  autodjPaused: false,
   library: [],
 };
 
@@ -583,11 +613,14 @@ async function pollNowPlaying() {
 function applyStatus(j) {
   const np = j.now_playing;
   const live = !!j.live, relay = !!j.relay;
+  const autodjPaused = !!j.autodj_paused;
   const isAiring = !!(np || live || relay);
 
   rstate.onAir = isAiring;
+  rstate.autodjPaused = autodjPaused;
   rels.onairBadge.classList.toggle('live', isAiring);
   rels.onairText.textContent = isAiring ? 'ON AIR' : 'OFF AIR';
+  updateAutoDjControls();
 
   // Station header
   rels.stationName.textContent = j.stream_name || 'Station';
@@ -621,6 +654,11 @@ function applyStatus(j) {
     rels.npLabel.textContent = isAiring ? '— DEAD AIR —' : '— BROADCASTING NOTHING —';
     rels.npTitle.textContent = isAiring ? 'No track playing' : 'Upload tracks to start AutoDJ';
     rels.npArtist.textContent = isAiring ? 'AutoDJ idle' : 'No active source';
+    if (autodjPaused) {
+      rels.npLabel.textContent = '— OFF AIR —';
+      rels.npTitle.textContent = 'Station is off air';
+      rels.npArtist.textContent = 'Go on air when the talk block starts';
+    }
     rels.npDuration.textContent = '0:00';
     rels.npBars.style.display = 'none';
     rels.npArtIcon.style.display = 'inline';
@@ -628,6 +666,10 @@ function applyStatus(j) {
 
   rels.icecastStatus.textContent = isAiring ? '● STREAMING' : '● READY';
   rels.icecastStatus.style.color = isAiring ? 'var(--on-air)' : 'var(--ok)';
+  if (autodjPaused) {
+    rels.icecastStatus.textContent = '● OFF AIR';
+    rels.icecastStatus.style.color = 'var(--warn)';
+  }
 
   // Update rail dot for radio plugin
   const radioDot = document.querySelector('.rail-item[data-id="radio"] .rail-icon .dot');
@@ -636,6 +678,39 @@ function applyStatus(j) {
   // Wake the audio analyser once we go on air.
   if (isAiring && !audioCtx) ensureAudio(j);
 }
+
+function updateAutoDjControls() {
+  const paused = !!rstate.autodjPaused;
+  const label = paused ? 'GO ON AIR' : 'GO OFF AIR';
+  const state = paused ? 'OFF AIR' : 'SERVER';
+  if (rels.autoState) rels.autoState.textContent = state;
+  [rels.autoDjToggle, rels.footerAutoDjToggle].forEach(btn => {
+    if (!btn) return;
+    btn.textContent = label;
+    btn.classList.toggle('is-active', paused);
+    btn.title = paused ? 'Resume AutoDJ and put the station back on air' : 'Stop AutoDJ and take the station off air';
+  });
+}
+
+async function toggleAutoDjAirState() {
+  const nextPaused = !rstate.autodjPaused;
+  [rels.autoDjToggle, rels.footerAutoDjToggle].forEach(btn => { if (btn) btn.disabled = true; });
+  try {
+    await API.setAutoDjPaused(nextPaused);
+    rstate.autodjPaused = nextPaused;
+    updateAutoDjControls();
+    toast(nextPaused ? 'Station is off air' : 'Station is on air');
+    await pollNowPlaying();
+  } catch (e) {
+    toast('Could not change air state');
+  } finally {
+    [rels.autoDjToggle, rels.footerAutoDjToggle].forEach(btn => { if (btn) btn.disabled = false; });
+  }
+}
+
+[rels.autoDjToggle, rels.footerAutoDjToggle].forEach(btn => {
+  if (btn) btn.addEventListener('click', toggleAutoDjAirState);
+});
 
 /* Web Audio analyser for master meters */
 let audioCtx = null, analyserL = null, analyserR = null;

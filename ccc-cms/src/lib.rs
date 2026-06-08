@@ -89,6 +89,9 @@ impl Plugin for CmsPlugin {
     fn icon(&self) -> &'static str {
         "icon-cms"
     }
+    fn admin_url(&self) -> String {
+        "/admin".into()
+    }
 
     fn status(&self, _ctx: &AppContext) -> PluginStatus {
         PluginStatus {
@@ -105,7 +108,7 @@ impl Plugin for CmsPlugin {
         }
     }
 
-    fn init(&mut self) -> Result<(), PluginError> {
+    fn init(&self) -> Result<(), PluginError> {
         let setup_state = if self.store.is_initialized() {
             "ready"
         } else {

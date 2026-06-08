@@ -1,0 +1,21 @@
+Initializing CMS (admin store: admin.toml, state: ready)
+Initializing Blog Plugin (DB-backed posts + markdown).
+Initializing Podcast Plugin (audio dir: ./media/podcast)
+Initializing Video Podcast Plugin (HLS: ./media/video-hls, source: ./media/video-source, ffmpeg: found)
+Initializing Radio Engine on TCP 8000 (mount /listen.mp3)
+Initializing Federation: handle=@station@ccc.example.com (RSA keypair ready)
+[radio-engine] listening on 0.0.0.0:8000
+Initializing Whisper: binary='whisper' (available: false)
+Initializing S3: bucket='' configured=false
+Initializing Newsletter: host='' configured=false
+Initializing SEO: site=https://example.com
+Initializing Analytics: in-memory ring buffer (capacity 5000)
+Initializing Bridge: content-blind WebRTC rendezvous.
+Initializing Ads (creative store + /api/ads/next).
+Starting Nuntius (CCC) on 0.0.0.0:3000 with 13 plugin(s) enabled: ["Content", "Blog", "Podcast", "Video Podcast", "Radio Station", "Federation", "Transcripts", "Object Storage", "Newsletter", "SEO", "Analytics", "Bridge", "Ads"]
+CMS enabled at /admin (sidecar: admin.toml)
+Analytics middleware engaged
+Server running on 0.0.0.0:3000
+[radio-engine] AutoDJ paused
+[radio-engine] AutoDJ resumed
+[radio-engine] AutoDJ paused

@@ -254,7 +254,9 @@ fn pick_queue(db: &Arc<CccDB>, active_id: Option<u64>) -> Vec<Track> {
 }
 
 fn preempted(state: &EngineState) -> bool {
-    state.source_alive.load(Ordering::SeqCst) || state.relay_alive.load(Ordering::SeqCst)
+    state.autodj_paused.load(Ordering::SeqCst)
+        || state.source_alive.load(Ordering::SeqCst)
+        || state.relay_alive.load(Ordering::SeqCst)
 }
 
 fn announce_track(state: &EngineState, track: &Track) {
@@ -331,9 +333,7 @@ async fn mix_crossfade(
         let b_n = read_exact_or_less(b, &mut b_buf).await;
 
         let progress = (i as f32 + 0.5) / chunks_total as f32;
-        let half_pi = std::f32::consts::FRAC_PI_2;
-        let w_a = (half_pi * progress).cos();
-        let w_b = (half_pi * progress).sin();
+        let (w_a, w_b) = equal_power_weights(progress);
 
         // Iterate sample-pair-by-sample-pair (4 bytes = stereo s16).
         let pairs = CHUNK_BYTES / 4;
@@ -389,4 +389,61 @@ async fn read_exact_or_less(src: &mut ChildStdout, buf: &mut [u8]) -> usize {
         }
     }
     filled
+}
+
+/// Equal-power crossfade weights. At `progress = 0.0` track A is at
+/// full gain and B is silent; at `progress = 1.0` A is silent and B
+/// is at full gain; in between, A^2 + B^2 = 1 (constant power).
+/// Returns `(weight_a, weight_b)`.
+fn equal_power_weights(progress: f32) -> (f32, f32) {
+    debug_assert!((0.0..=1.0).contains(&progress));
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    // At progress=0: (cos(0), sin(0)) = (1, 0)  -> A full, B silent
+    // At progress=1: (cos(pi/2), sin(pi/2)) = (0, 1)  -> A silent, B full
+    let angle = half_pi * progress;
+    (angle.cos(), angle.sin())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equal_power_endpoints() {
+        let (a, b) = equal_power_weights(0.0);
+        assert!((a - 1.0).abs() < 1e-6, "a at 0 = {a}");
+        assert!(b.abs() < 1e-6, "b at 0 = {b}");
+        let (a, b) = equal_power_weights(1.0);
+        assert!(a.abs() < 1e-6, "a at 1 = {a}");
+        assert!((b - 1.0).abs() < 1e-6, "b at 1 = {b}");
+    }
+
+    #[test]
+    fn equal_power_conserves_total_power() {
+        // A^2 + B^2 should equal 1.0 at every point in the fade.
+        // We sample at 11 positions and tolerate a 1e-3 error.
+        for i in 0..=10 {
+            let p = i as f32 / 10.0;
+            let (a, b) = equal_power_weights(p);
+            let power = a * a + b * b;
+            assert!(
+                (power - 1.0).abs() < 1e-3,
+                "progress={p} a={a} b={b} power={power}"
+            );
+        }
+    }
+
+    #[test]
+    fn equal_power_is_strictly_monotonic() {
+        let mut prev_a = f32::INFINITY;
+        for i in 0..=20 {
+            let p = i as f32 / 20.0;
+            let (a, _) = equal_power_weights(p);
+            assert!(
+                a < prev_a,
+                "weight_a should decrease, got {a} after {prev_a}"
+            );
+            prev_a = a;
+        }
+    }
 }
