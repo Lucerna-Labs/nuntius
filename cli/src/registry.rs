@@ -67,6 +67,10 @@ pub fn register_by_name(
             let plugin = ccc_plugin_s3::CccPluginS3Plugin::from_config(cfg)?;
             manager.register(plugin)?;
         }
+        "stream-watch" => {
+            let plugin = ccc_plugin_stream_watch::StreamWatchPlugin::from_config(cfg)?;
+            manager.register(plugin)?;
+        }
         "seo" => {
             let plugin = ccc_plugin_seo::CccPluginSeoPlugin::from_config(cfg)?;
             manager.register(plugin)?;
@@ -101,6 +105,7 @@ pub fn known_plugins() -> &'static [&'static str] {
         "newsletter",
         "s3",
         "seo",
+        "stream-watch",
         "theme-dark-matter",
         "whisper",
     ]

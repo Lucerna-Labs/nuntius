@@ -1,0 +1,22 @@
+[package]
+name = "ccc-plugin-stream-watch"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ccc-core = { path = "../core" }
+ccc-plugin-utils = { path = "../ccc-plugin-utils" }
+
+axum = { version = "0.7.9", features = ["macros"] }
+tokio = { version = "1.0", features = ["full", "process", "io-util", "net", "time", "sync"] }
+askama = "0.12"
+askama_axum = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tracing = "0.1"
+tokio-util = "0.7"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time", "test-util"] }
+toml = "0.8"

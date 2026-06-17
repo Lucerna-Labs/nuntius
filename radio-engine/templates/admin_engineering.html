@@ -232,6 +232,64 @@
       </div>
     </section>
 
+    <section class="eng-card">
+      <h2>Dead-air backup</h2>
+      <p class="eng-card__lede">If the AutoDJ can't find a track to play for this long, fall back to a pre-configured backup rotation. Prevents listener-facing silence during outages, missing files, or schedule gaps.</p>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Dead-air threshold (seconds)</span>
+        <div class="eng-input-row">
+          <input class="eng-input" type="number" name="dead_air_seconds" value="{{ dead_air_seconds }}" min="0" max="600" style="max-width:120px;">
+          <span class="unit">s</span>
+        </div>
+        <span class="eng-field__hint">Set to 0 to disable the backup rotation entirely. Default 15s.</span>
+      </label>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Backup track IDs</span>
+        <input class="eng-input" type="text" name="backup_track_ids" value="{{ backup_track_ids_csv }}" placeholder="42 43 44">
+        <span class="eng-field__hint">Comma- or whitespace-separated list of track IDs from the library. Short station IDs and jingles work best.</span>
+      </label>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Max time on backup (seconds)</span>
+        <div class="eng-input-row">
+          <input class="eng-input" type="number" name="backup_max_seconds" value="{{ backup_max_seconds }}" min="0" max="86400" style="max-width:140px;">
+          <span class="unit">s</span>
+        </div>
+        <span class="eng-field__hint">After this long on backup, the engine tries the main library again. Default 300s (5 min).</span>
+      </label>
+    </section>
+
+    <section class="eng-card">
+      <h2>Frequency caps</h2>
+      <p class="eng-card__lede">Prevent the same artist (or album) from airing too often within a rolling window. The AutoDJ skips candidates that would violate the cap, falling through to the next shuffled track.</p>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Max times per artist (per window)</span>
+        <div class="eng-input-row">
+          <input class="eng-input" type="number" name="max_artist_in_window" value="{{ max_artist_in_window }}" min="0" max="50" style="max-width:120px;">
+        </div>
+        <span class="eng-field__hint">0 = no cap. Default 4. Matches the SoundExchange "performance complement" ceiling for safe harbor.</span>
+      </label>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Max times per album (per window)</span>
+        <div class="eng-input-row">
+          <input class="eng-input" type="number" name="max_album_in_window" value="{{ max_album_in_window }}" min="0" max="50" style="max-width:120px;">
+        </div>
+        <span class="eng-field__hint">0 = no cap. Default 3. Album metadata is not in history; the engine relies on the AutoDJ's shuffle to spread albums naturally.</span>
+      </label>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Rolling window width (hours)</span>
+        <div class="eng-input-row">
+          <input class="eng-input" type="number" name="cap_window_hours" value="{{ cap_window_hours }}" min="1" max="24" style="max-width:120px;">
+        </div>
+        <span class="eng-field__hint">How far back the cap looks. Default 3h — the longest "performance complement" window in statutory radio licensing.</span>
+      </label>
+    </section>
+
     <div class="eng-actions">
       <button class="eng-btn" type="submit">Save settings</button>
       <span style="font-size:12px; color: var(--ink-dim);">Changes apply on next AutoDJ pass.</span>

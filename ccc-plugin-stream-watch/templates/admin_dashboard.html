@@ -1,0 +1,109 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Stream Watch — Nuntius{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>Stream Watch</h1>
+  <p class="cms-page__lede">Shark-style dead-air detection. Polls the engine every <code>{{ tick_seconds }}s</code>; emits alerts on state changes.</p>
+</header>
+
+<section class="cms-section" style="margin-bottom: 24px;">
+  <h2>Health</h2>
+  <p>
+    <span class="cms-badge" style="background: {{ state_color }};">{{ state }}</span>
+    {% if np_label != "—" %}<span class="meta">now playing: {{ np_label }}</span>{% endif %}
+  </p>
+  <table class="cms-table">
+    <tbody>
+      <tr><td>Last healthy</td><td>{{ last_healthy_human }}</td></tr>
+      <tr><td>Failed HTTP probes</td><td>{{ failed_probes }}</td></tr>
+      <tr><td>Bytes last tick</td><td>{{ last_tick_bytes }}</td></tr>
+      <tr><td>Reason</td><td>{{ reason }}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="cms-section" style="margin-bottom: 24px;">
+  <h2>Settings</h2>
+  <form method="POST" action="/admin/stream-watch">
+    <p>
+      <label>Engine URL<br/>
+        <input name="engine_url" type="text" value="{{ engine_url }}" size="50" />
+      </label>
+    </p>
+    <p>
+      <label>Mount path<br/>
+        <input name="mount_path" type="text" value="{{ mount_path }}" size="50" />
+      </label>
+    </p>
+    <p>
+      <label>Tick seconds<br/>
+        <input name="tick_seconds" type="number" min="2" max="3600" value="{{ tick_seconds }}" />
+      </label>
+    </p>
+    <p>
+      <label>Stale seconds<br/>
+        <input name="stale_seconds" type="number" min="10" max="3600" value="{{ stale_seconds }}" />
+      </label>
+    </p>
+    <p>
+      <label>Min bytes per tick<br/>
+        <input name="min_bytes_per_tick" type="number" min="0" value="{{ min_bytes }}" />
+      </label>
+    </p>
+    <p>
+      <label>Max failed probes<br/>
+        <input name="max_failed_probes" type="number" min="1" max="30" value="{{ max_failed_probes }}" />
+      </label>
+    </p>
+    <p>
+      <label>Alert cooldown seconds<br/>
+        <input name="alert_cooldown_seconds" type="number" min="0" max="86400" value="{{ alert_cooldown_seconds }}" />
+      </label>
+    </p>
+    <p>
+      <label>Discord webhook URL<br/>
+        <input name="discord_webhook_url" type="text" value="{{ discord_webhook_url }}" size="60" />
+      </label>
+    </p>
+    <p>
+      <label>Generic webhook URL<br/>
+        <input name="generic_webhook_url" type="text" value="{{ generic_webhook_url }}" size="60" />
+      </label>
+    </p>
+    <p><button type="submit">Save</button>
+      {% if saved %}<span class="meta">Saved.</span>{% endif %}
+    </p>
+  </form>
+</section>
+
+<section class="cms-section">
+  <h2>Recent events</h2>
+  {% if events.is_empty() %}
+  <p>No state transitions recorded yet.</p>
+  {% else %}
+  <table class="cms-table">
+    <thead><tr><th>When</th><th>Kind</th><th>Summary</th></tr></thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td>{{ e.when_human }}</td>
+        <td><span class="cms-badge" style="background: {{ e.kind_color }};">{{ e.kind }}</span></td>
+        <td>{{ e.summary }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>How this works</h3>
+  <p>The watcher pings the engine every <code>{{ tick_seconds }}s</code>. It opens a side-listener against the mount, counts bytes, and reads <code>/api/radio/nowplaying</code> for the current track.</p>
+  <p>States: <span class="cms-badge" style="background:#3ecf8e;">healthy</span> (all signals good), <span class="cms-badge" style="background:#f0b400;">degraded</span> (one signal weak), <span class="cms-badge" style="background:#e23b3b;">down</span> (multiple signals bad).</p>
+  <p>Discord / generic webhook URLs fire on each state change, gated by the cooldown so you don't get spammed.</p>
+</div>
+{% endblock %}

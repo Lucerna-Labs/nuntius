@@ -12,6 +12,7 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use ccc_database::Track;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 
@@ -39,12 +40,12 @@ struct TrackRow {
     gain_human: String,
 }
 
-pub async fn admin_track_list(State(state): State<EngineState>) -> Response {
+pub async fn admin_track_list(State(state): State<Arc<EngineState>>) -> Response {
     render_list(&state, None)
 }
 
 pub async fn admin_track_upload(
-    State(state): State<EngineState>,
+    State(state): State<Arc<EngineState>>,
     mut multipart: Multipart,
 ) -> Response {
     let db = match state.db.clone() {
@@ -181,7 +182,10 @@ async fn measure_loudness_offset(path: &PathBuf) -> Option<f32> {
     Some(-23.0 - measured)
 }
 
-pub async fn admin_track_delete(State(state): State<EngineState>, Path(id): Path<u64>) -> Response {
+pub async fn admin_track_delete(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<u64>,
+) -> Response {
     let db = match state.db.clone() {
         Some(db) => db,
         None => return Redirect::to("/admin/radio/tracks").into_response(),

@@ -23,6 +23,7 @@ members = [
     "ccc-plugin-drop",
     "ccc-plugin-newsletter",
     "ccc-plugin-s3",
+    "ccc-plugin-stream-watch",
     "ccc-plugin-seo",
     "ccc-plugin-theme-dark-matter",
     "ccc-plugin-whisper",

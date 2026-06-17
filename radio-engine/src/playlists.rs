@@ -32,7 +32,7 @@ struct PlaylistRow {
     track_count: usize,
 }
 
-pub async fn admin_list(State(state): State<EngineState>) -> Response {
+pub async fn admin_list(State(state): State<Arc<EngineState>>) -> Response {
     render_list(&state, None)
 }
 
@@ -42,7 +42,7 @@ pub struct CreateForm {
 }
 
 pub async fn admin_create(
-    State(state): State<EngineState>,
+    State(state): State<Arc<EngineState>>,
     Form(form): Form<CreateForm>,
 ) -> Response {
     let db = match state.db.clone() {
@@ -94,7 +94,10 @@ struct EditTrackRow {
     artist: String,
 }
 
-pub async fn admin_edit_form(State(state): State<EngineState>, Path(id): Path<u64>) -> Response {
+pub async fn admin_edit_form(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<u64>,
+) -> Response {
     let db = match state.db.clone() {
         Some(db) => db,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -132,7 +135,7 @@ pub struct EditForm {
 }
 
 pub async fn admin_edit_post(
-    State(state): State<EngineState>,
+    State(state): State<Arc<EngineState>>,
     Path(id): Path<u64>,
     Form(form): Form<EditForm>,
 ) -> Response {
@@ -191,7 +194,7 @@ pub async fn admin_edit_post(
     Redirect::to(&format!("/admin/radio/playlists/{}/edit", id)).into_response()
 }
 
-pub async fn admin_delete(State(state): State<EngineState>, Path(id): Path<u64>) -> Response {
+pub async fn admin_delete(State(state): State<Arc<EngineState>>, Path(id): Path<u64>) -> Response {
     if let Some(db) = state.db.clone() {
         let _ = db.delete_playlist(id);
     }
@@ -204,7 +207,7 @@ pub struct AddTrackForm {
 }
 
 pub async fn admin_add_track(
-    State(state): State<EngineState>,
+    State(state): State<Arc<EngineState>>,
     Path(id): Path<u64>,
     Form(form): Form<AddTrackForm>,
 ) -> Response {
@@ -215,7 +218,7 @@ pub async fn admin_add_track(
 }
 
 pub async fn admin_remove_track(
-    State(state): State<EngineState>,
+    State(state): State<Arc<EngineState>>,
     Path((id, position)): Path<(u64, u64)>,
 ) -> Response {
     if let Some(db) = state.db.clone() {

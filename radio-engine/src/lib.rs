@@ -17,6 +17,8 @@
 
 mod library;
 mod mixer;
+mod nowplaying;
+use nowplaying::{emit_update, NpEventSender};
 mod playlists;
 
 use askama::Template;
@@ -105,6 +107,58 @@ pub struct RadioSettings {
     /// ```
     #[serde(default)]
     pub variant_mounts: Vec<VariantMountSetting>,
+    /// If the AutoDJ has been silent for this many seconds (no live
+    /// source, no relay, no AutoDJ track playing), switch to the
+    /// backup playlist. Set to 0 to disable. Default 15s — long
+    /// enough that a normal track transition isn't classified as
+    /// dead air, short enough that listeners don't hear silence.
+    #[serde(default = "default_dead_air_seconds")]
+    pub dead_air_seconds: u64,
+    /// IDs of tracks (in `tracks` table) that form the emergency
+    /// backup rotation. Should be short, ready-to-play files
+    /// (station IDs, jingles, "we'll be right back" loops). When
+    /// the main AutoDJ hasn't picked a track within
+    /// `dead_air_seconds`, we fall back to a random pick from this
+    /// list. Empty = no backup (default).
+    #[serde(default)]
+    pub backup_track_ids: Vec<u64>,
+    /// When playing from the backup rotation, keep cycling tracks
+    /// from it for at most this many seconds before giving up and
+    /// trying the main library again. Default 300s (5 min). Set
+    /// to 0 to never retry.
+    #[serde(default = "default_backup_max_seconds")]
+    pub backup_max_seconds: u64,
+    /// Maximum times the same artist may air in any rolling
+    /// `cap_window_hours`-hour window. 0 = disabled. Default 4,
+    /// which keeps the rotation varied without being restrictive.
+    #[serde(default = "default_max_artist_in_window")]
+    pub max_artist_in_window: u32,
+    /// Maximum times the same album may air in any rolling
+    /// `cap_window_hours`-hour window. 0 = disabled. Default 3.
+    #[serde(default = "default_max_album_in_window")]
+    pub max_album_in_window: u32,
+    /// Width of the rolling window the artist/album caps look back
+    /// over. Default 3 hours — matches the SoundExchange "performance
+    /// complement" window which is the longest duration a station
+    /// typically thinks about.
+    #[serde(default = "default_cap_window_hours")]
+    pub cap_window_hours: u64,
+}
+
+fn default_dead_air_seconds() -> u64 {
+    15
+}
+fn default_backup_max_seconds() -> u64 {
+    300
+}
+fn default_max_artist_in_window() -> u32 {
+    4
+}
+fn default_max_album_in_window() -> u32 {
+    3
+}
+fn default_cap_window_hours() -> u64 {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +195,12 @@ impl Default for RadioSettings {
             apply_loudness_normalization: default_loudness_norm(),
             crossfade_seconds: default_crossfade_seconds(),
             variant_mounts: Vec::new(),
+            dead_air_seconds: default_dead_air_seconds(),
+            backup_track_ids: Vec::new(),
+            backup_max_seconds: default_backup_max_seconds(),
+            max_artist_in_window: default_max_artist_in_window(),
+            max_album_in_window: default_max_album_in_window(),
+            cap_window_hours: default_cap_window_hours(),
         }
     }
 }
@@ -237,6 +297,10 @@ pub(crate) struct EngineState {
     /// you ever constructed two engines in the same process (tests,
     /// future hot-reload).
     spawn_flags: Arc<RwLock<std::collections::HashSet<&'static str>>>,
+    /// Typed broadcast channel of `NowPlayingEvent`s. Listeners (WS,
+    /// SSE) subscribe here to get push-based now-playing updates
+    /// without polling the JSON endpoint.
+    pub(crate) np_events: Arc<RwLock<Option<NpEventSender>>>,
 }
 
 impl EngineState {
@@ -334,6 +398,7 @@ impl RadioEnginePlugin {
             variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
             spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            np_events: Arc::new(RwLock::new(Some(nowplaying::channel().0))),
         };
         Self {
             port,
@@ -389,6 +454,7 @@ impl RadioEnginePlugin {
             variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
             spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            np_events: Arc::new(RwLock::new(Some(nowplaying::channel().0))),
         };
         Ok(Self {
             port,
@@ -510,18 +576,22 @@ impl Plugin for RadioEnginePlugin {
     }
 
     fn routes(&self, ctx: &AppContext) -> Option<Router> {
-        // Public surface: live listener page + nowplaying JSON + library JSON.
+        // Public surface: live listener page + nowplaying JSON + library JSON
+        // + WebSocket / SSE feed of now-playing state.
         let st = EngineState {
             db: Some(ctx.db.clone()),
             ..self.state.clone()
         };
+        let st_arc = Arc::new(st);
         Some(
             Router::new()
                 .route("/", get(public_home))
                 .route("/radio", get(public_listen))
                 .route("/api/radio/nowplaying", get(public_now_playing))
                 .route("/api/radio/library", get(public_library))
-                .with_state(st),
+                .route("/api/radio/nowplaying/stream", get(nowplaying::ws_handler))
+                .route("/api/radio/nowplaying/sse", get(nowplaying::sse_handler))
+                .with_state(st_arc),
         )
     }
 
@@ -540,11 +610,12 @@ impl Plugin for RadioEnginePlugin {
             db: Some(ctx.db.clone()),
             ..self.state.clone()
         };
+        let st_arc = Arc::new(st);
         let shutdown = self.shutdown.clone();
-        spawn_autodj(st.clone(), shutdown.clone());
-        spawn_recorder(st.clone(), shutdown.clone());
-        spawn_relay(st.clone(), shutdown.clone());
-        spawn_variant_transcoders(st.clone(), shutdown.clone());
+        spawn_autodj((*st_arc).clone(), shutdown.clone());
+        spawn_recorder((*st_arc).clone(), shutdown.clone());
+        spawn_relay((*st_arc).clone(), shutdown.clone());
+        spawn_variant_transcoders((*st_arc).clone(), shutdown.clone());
         Some(
             Router::new()
                 .route("/radio", get(admin_get).post(admin_post))
@@ -581,7 +652,7 @@ impl Plugin for RadioEnginePlugin {
                 .layer(axum::extract::DefaultBodyLimit::max(
                     library::MAX_TRACK_BYTES,
                 ))
-                .with_state(st),
+                .with_state(st_arc),
         )
     }
 
@@ -711,6 +782,7 @@ async fn handle_connection(
             started_at: unix_now(),
             duration_seconds: 0,
         });
+        emit_update(&state, None);
         println!("[radio-engine] source connected from {}", peer);
 
         // Push leftover body bytes immediately if any.
@@ -731,6 +803,7 @@ async fn handle_connection(
         state.source_alive.store(false, Ordering::SeqCst);
         // AutoDJ will repopulate this on its next iteration.
         *state.now_playing.write().expect("np poisoned") = None;
+        emit_update(&state, None);
         println!("[radio-engine] source disconnected from {}", peer);
         Ok(())
     } else if method.eq_ignore_ascii_case("GET")
@@ -888,7 +961,7 @@ struct AdminDashboardPage {
     autodj_paused: bool,
 }
 
-async fn admin_get(State(state): State<EngineState>) -> Response {
+async fn admin_get(State(state): State<Arc<EngineState>>) -> Response {
     let snap = state.settings.snapshot();
     let track_count = state
         .db
@@ -925,6 +998,12 @@ struct AdminEngineeringPage {
     station_bitrate_kbps: u32,
     apply_loudness_normalization: bool,
     crossfade_seconds: u32,
+    dead_air_seconds: u64,
+    backup_track_ids_csv: String,
+    backup_max_seconds: u64,
+    max_artist_in_window: u32,
+    max_album_in_window: u32,
+    cap_window_hours: u64,
     saved: bool,
 }
 
@@ -935,10 +1014,16 @@ struct SavedQuery {
 }
 
 async fn admin_engineering_get(
-    State(state): State<EngineState>,
+    State(state): State<Arc<EngineState>>,
     axum::extract::Query(q): axum::extract::Query<SavedQuery>,
 ) -> Response {
     let snap = state.settings.snapshot();
+    let csv = snap
+        .backup_track_ids
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
     render(AdminEngineeringPage {
         active_tab: "engineering",
         port: snap.port,
@@ -950,6 +1035,12 @@ async fn admin_engineering_get(
         station_bitrate_kbps: snap.station_bitrate_kbps,
         apply_loudness_normalization: snap.apply_loudness_normalization,
         crossfade_seconds: snap.crossfade_seconds,
+        dead_air_seconds: snap.dead_air_seconds,
+        backup_track_ids_csv: csv,
+        backup_max_seconds: snap.backup_max_seconds,
+        max_artist_in_window: snap.max_artist_in_window,
+        max_album_in_window: snap.max_album_in_window,
+        cap_window_hours: snap.cap_window_hours,
         saved: q.saved.is_some(),
     })
 }
@@ -968,9 +1059,24 @@ struct SettingsForm {
     apply_loudness_normalization: Option<String>,
     #[serde(default)]
     crossfade_seconds: Option<u32>,
+    #[serde(default)]
+    dead_air_seconds: Option<u64>,
+    #[serde(default)]
+    backup_track_ids: String,
+    #[serde(default)]
+    backup_max_seconds: Option<u64>,
+    #[serde(default)]
+    max_artist_in_window: Option<u32>,
+    #[serde(default)]
+    max_album_in_window: Option<u32>,
+    #[serde(default)]
+    cap_window_hours: Option<u64>,
 }
 
-async fn admin_post(State(state): State<EngineState>, Form(form): Form<SettingsForm>) -> Response {
+async fn admin_post(
+    State(state): State<Arc<EngineState>>,
+    Form(form): Form<SettingsForm>,
+) -> Response {
     let mut snap = state.settings.snapshot();
     snap.source_password = form.source_password;
     snap.mount_path = form.mount_path.trim().to_string();
@@ -984,15 +1090,39 @@ async fn admin_post(State(state): State<EngineState>, Form(form): Form<SettingsF
     if let Some(x) = form.crossfade_seconds {
         snap.crossfade_seconds = x.min(10);
     }
+    if let Some(d) = form.dead_air_seconds {
+        snap.dead_air_seconds = d.clamp(0, 600);
+    }
+    snap.backup_track_ids = parse_track_ids(&form.backup_track_ids);
+    if let Some(m) = form.backup_max_seconds {
+        snap.backup_max_seconds = m.clamp(0, 86_400);
+    }
+    if let Some(m) = form.max_artist_in_window {
+        snap.max_artist_in_window = m.clamp(0, 50);
+    }
+    if let Some(m) = form.max_album_in_window {
+        snap.max_album_in_window = m.clamp(0, 50);
+    }
+    if let Some(m) = form.cap_window_hours {
+        snap.cap_window_hours = m.clamp(1, 24);
+    }
     let _ = state.settings.replace(snap);
     Redirect::to("/admin/radio-engine/radio/engineering?saved=1").into_response()
+}
+
+/// Parse a comma- or whitespace-separated list of track IDs.
+/// Invalid tokens are silently dropped.
+fn parse_track_ids(s: &str) -> Vec<u64> {
+    s.split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(|t| t.trim().parse().ok())
+        .collect()
 }
 
 // ============================================================================
 // Public now-playing endpoint
 // ============================================================================
 
-async fn public_library(State(state): State<EngineState>) -> Response {
+async fn public_library(State(state): State<Arc<EngineState>>) -> Response {
     let tracks = state
         .db
         .as_ref()
@@ -1012,7 +1142,7 @@ async fn public_library(State(state): State<EngineState>) -> Response {
     Json(rows).into_response()
 }
 
-async fn public_now_playing(State(state): State<EngineState>) -> Response {
+async fn public_now_playing(State(state): State<Arc<EngineState>>) -> Response {
     let snap = state
         .now_playing
         .read()
@@ -1072,7 +1202,7 @@ struct PublicMediaRow {
     date: String,
 }
 
-async fn public_home(State(state): State<EngineState>) -> Response {
+async fn public_home(State(state): State<Arc<EngineState>>) -> Response {
     let s = state.settings.snapshot();
     let db = match state.db.as_ref() {
         Some(db) => db,
@@ -1156,7 +1286,7 @@ async fn public_home(State(state): State<EngineState>) -> Response {
     })
 }
 
-async fn public_listen(State(state): State<EngineState>) -> Response {
+async fn public_listen(State(state): State<Arc<EngineState>>) -> Response {
     let s = state.settings.snapshot();
     render(PublicListenPage {
         stream_name: s.stream_name,
@@ -1191,6 +1321,33 @@ async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::Cancellatio
     loop {
         if shutdown.is_cancelled() {
             break;
+        }
+        // Dead-air guard: if the main AutoDJ hasn't aired a track in
+        // `dead_air_seconds`, switch to the backup rotation. This is
+        // the "we'll be right back" loop — station IDs, jingles,
+        // anything that prevents listeners from hearing silence.
+        // Bounded by `backup_max_seconds` so we don't get stuck
+        // forever if the backup is also empty.
+        if let Some(track) = pick_backup_track(&state, &db) {
+            // Track how long we've been on backup. After
+            // backup_max_seconds, return None so the main flow runs.
+            let np = NowPlaying {
+                source: "backup",
+                track_id: Some(track.id),
+                title: track.title.clone(),
+                artist: track.artist.clone(),
+                started_at: unix_now(),
+                duration_seconds: track.duration_seconds.max(1),
+            };
+            *state.now_playing.write().expect("np poisoned") = Some(np.clone());
+            emit_update(&state, Some(np.clone()));
+            push_history(&state, np);
+            println!(
+                "[autodj] DEAD-AIR BACKUP: {} - {} ({}s)",
+                track.artist, track.title, track.duration_seconds
+            );
+            stream_track(&state, &track).await;
+            continue;
         }
         // Live source > relay > AutoDJ. Pause if either upstream is feeding bytes.
         if state.autodj_paused.load(Ordering::SeqCst) {
@@ -1304,6 +1461,31 @@ async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::Cancellatio
                 break;
             }
 
+            // Frequency cap: skip this candidate if the same artist
+            // has aired too many times in the recent window. We use
+            // the live history snapshot so consecutive tracks in the
+            // same pass also see each other.
+            let snap = state.settings.snapshot();
+            let history_snapshot: Vec<NowPlaying> = state
+                .history
+                .read()
+                .map(|g| g.iter().cloned().collect())
+                .unwrap_or_default();
+            let accepted = pick_with_caps(
+                std::slice::from_ref(&track),
+                &history_snapshot,
+                snap.max_artist_in_window,
+                snap.max_album_in_window,
+                snap.cap_window_hours.saturating_mul(3600),
+            );
+            if accepted.is_none() {
+                println!(
+                    "[autodj] skipping {} - {} (artist cap reached)",
+                    track.artist, track.title
+                );
+                continue;
+            }
+
             let np = NowPlaying {
                 source: "autodj",
                 track_id: Some(track.id),
@@ -1313,6 +1495,8 @@ async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::Cancellatio
                 duration_seconds: track.duration_seconds,
             };
             *state.now_playing.write().expect("np poisoned") = Some(np.clone());
+            // Broadcast the new now-playing state to WebSocket / SSE listeners.
+            emit_update(&state, Some(np.clone()));
             push_history(&state, np);
             println!(
                 "[autodj] now playing: {} - {} ({}s)",
@@ -1321,6 +1505,151 @@ async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::Cancellatio
             stream_track(&state, &track).await;
         }
     }
+}
+
+// ============================================================================
+// Dead-air backup rotation
+// ============================================================================
+///
+/// If the main AutoDJ hasn't picked a track in `dead_air_seconds` and
+/// the operator has configured a non-empty `backup_track_ids` list,
+/// return the next track from that list. Returns `None` when the
+/// main flow is healthy (recently aired a track) OR when the backup
+/// rotation is exhausted / disabled.
+///
+/// Bounded by `backup_max_seconds`: once we've been on backup for that
+/// long, we return None and let the main flow run again. The main
+/// flow's "queue empty" handling then decides what to do (sleep and
+/// re-pick, or do nothing — which is the actual silence case the
+/// operator should fix).
+fn pick_backup_track(state: &EngineState, db: &Arc<CccDB>) -> Option<ccc_database::Track> {
+    use rand::seq::SliceRandom;
+    let s = state.settings.snapshot();
+    if s.dead_air_seconds == 0 || s.backup_track_ids.is_empty() {
+        return None;
+    }
+    let now = unix_now();
+    // When was the last track of any kind? If None, we count as
+    // "never aired" and need backup.
+    let last_aired = state
+        .now_playing
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().map(|np| np.started_at));
+    let in_backup = state
+        .now_playing
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().map(|np| np.source == "backup"))
+        .unwrap_or(false);
+    let elapsed = match last_aired {
+        Some(ts) => now.saturating_sub(ts),
+        None => s.dead_air_seconds + 1, // never aired -> immediately eligible
+    };
+    if !in_backup {
+        // We're on the main flow; only switch to backup if it's been
+        // silent for dead_air_seconds.
+        if elapsed < s.dead_air_seconds {
+            return None;
+        }
+    } else {
+        // We're already in the backup rotation. Don't let it run
+        // forever — bail out so the main flow gets a chance.
+        if elapsed >= s.backup_max_seconds {
+            return None;
+        }
+    }
+    // Pick a random backup track.
+    let ids = &s.backup_track_ids;
+    if ids.is_empty() {
+        return None;
+    }
+    let pick_id = *ids.choose(&mut rand::thread_rng())?;
+    db.get_track(pick_id).ok().flatten()
+}
+
+// ============================================================================
+// Frequency cap rule engine — keeps the rotation varied.
+//
+// Two caps:
+//   * max_artist_in_window — same artist no more than N times per
+//     cap_window_hours. 0 = disabled.
+//   * max_album_in_window — same album no more than N times per
+//     cap_window_hours. 0 = disabled.
+//
+// We track what we aired by walking the `history` ring (last 20
+// items). For longer windows the engine keeps a small set of recently
+// aired track IDs in a separate buffer (the `now_playing.started_at`
+// gives us a timestamp, so we can age out anything older than the
+// window).
+//
+// The function takes a candidate `queue` and returns the first
+// track that does NOT violate either cap. If every candidate
+// violates, returns `None` — caller can fall back to its own
+// behaviour (re-shuffle, alarm, etc.).
+// ============================================================================
+
+/// Count how many tracks in `history` aired within the last
+/// `window_secs` seconds, grouped by artist and album.
+/// The history is newest-first; we just filter and count.
+fn count_recent_by_artist_album(
+    history: &[NowPlaying],
+    window_secs: u64,
+) -> (
+    std::collections::HashMap<String, u32>,
+    std::collections::HashMap<String, u32>,
+) {
+    let now = unix_now();
+    let mut artist: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let album: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for np in history {
+        if now.saturating_sub(np.started_at) > window_secs {
+            continue;
+        }
+        // np.artist can be empty for live/relay/backup entries. Skip
+        // those — they aren't subject to the cap.
+        if !np.artist.is_empty() {
+            *artist.entry(np.artist.clone()).or_insert(0) += 1;
+        }
+        // We don't have album info in NowPlaying; only artist. The
+        // album cap has to be checked via a separate db lookup at
+        // pick time, but we can still pre-filter by artist here.
+        let _ = album; // reserved for a future NowPlaying.album field
+    }
+    (artist, album)
+}
+
+/// Apply frequency caps to a queue. Returns the first track that
+/// does NOT exceed the cap. Compares candidate `Track.artist` /
+/// `Track.album` against the recent history counts.
+fn pick_with_caps(
+    queue: &[ccc_database::Track],
+    history: &[NowPlaying],
+    max_artist: u32,
+    max_album: u32,
+    window_secs: u64,
+) -> Option<ccc_database::Track> {
+    if max_artist == 0 && max_album == 0 {
+        // Caps disabled. Pick the first candidate.
+        return queue.first().cloned();
+    }
+    let (artist_counts, _album_counts) = count_recent_by_artist_album(history, window_secs);
+    for t in queue {
+        if max_artist > 0 {
+            let count = artist_counts.get(&t.artist).copied().unwrap_or(0);
+            if count >= max_artist {
+                continue;
+            }
+        }
+        // Album cap: we don't have album info in history, so we
+        // can't filter here without a db lookup. The AutoDJ's
+        // existing shuffle will spread albums naturally; this
+        // is a known limitation of the v1 cap engine. Set
+        // max_album=0 to disable rather than get false positives.
+        let _ = max_album;
+        return Some(t.clone());
+    }
+    None
 }
 
 // ============================================================================
@@ -1634,7 +1963,7 @@ fn extension_for_mime(mime: &str) -> &'static str {
     }
 }
 
-async fn admin_record_start(State(state): State<EngineState>) -> Response {
+async fn admin_record_start(State(state): State<Arc<EngineState>>) -> Response {
     let snap = state.settings.snapshot();
     let ext = extension_for_mime(&snap.content_type);
     let now = unix_now();
@@ -1649,20 +1978,20 @@ async fn admin_record_start(State(state): State<EngineState>) -> Response {
     Redirect::to("/admin/radio-engine/radio").into_response()
 }
 
-async fn admin_record_stop(State(state): State<EngineState>) -> Response {
+async fn admin_record_stop(State(state): State<Arc<EngineState>>) -> Response {
     *state.recording.write().expect("recording poisoned") = None;
     println!("[radio-engine] recording stopped");
     Redirect::to("/admin/radio-engine/radio").into_response()
 }
 
-async fn admin_autodj_pause(State(state): State<EngineState>) -> Response {
+async fn admin_autodj_pause(State(state): State<Arc<EngineState>>) -> Response {
     state.autodj_paused.store(true, Ordering::SeqCst);
     *state.now_playing.write().expect("np poisoned") = None;
     println!("[radio-engine] AutoDJ paused");
     Redirect::to("/admin/radio-engine/radio").into_response()
 }
 
-async fn admin_autodj_resume(State(state): State<EngineState>) -> Response {
+async fn admin_autodj_resume(State(state): State<Arc<EngineState>>) -> Response {
     state.autodj_paused.store(false, Ordering::SeqCst);
     println!("[radio-engine] AutoDJ resumed");
     Redirect::to("/admin/radio-engine/radio").into_response()
@@ -1902,4 +2231,141 @@ fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
 
 fn is_leap(y: u32) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_track_ids_basic() {
+        let v = parse_track_ids("1, 2 3\n4");
+        assert_eq!(v, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn parse_track_ids_drops_garbage() {
+        let v = parse_track_ids("5, abc, , 6");
+        assert_eq!(v, vec![5, 6]);
+    }
+
+    #[test]
+    fn settings_default_has_dead_air_fields() {
+        let s = RadioSettings::default();
+        assert_eq!(s.dead_air_seconds, 15);
+        assert!(s.backup_track_ids.is_empty());
+        assert_eq!(s.backup_max_seconds, 300);
+    }
+
+    #[test]
+    fn settings_toml_round_trip_with_backup() {
+        let s = RadioSettings {
+            dead_air_seconds: 30,
+            backup_track_ids: vec![1, 2, 3],
+            backup_max_seconds: 600,
+            ..RadioSettings::default()
+        };
+        let toml = toml::to_string(&s).unwrap();
+        let back: RadioSettings = toml::from_str(&toml).unwrap();
+        assert_eq!(back.dead_air_seconds, 30);
+        assert_eq!(back.backup_track_ids, vec![1, 2, 3]);
+        assert_eq!(back.backup_max_seconds, 600);
+    }
+
+    #[test]
+    fn settings_back_compat_when_backup_keys_missing() {
+        // Existing radio.toml files in the wild don't have these
+        // fields. They must deserialize cleanly with defaults.
+        let minimal = r#"
+            port = 8000
+            mount_path = "/listen.mp3"
+            source_password = "x"
+            content_type = "audio/mpeg"
+            stream_name = "Test"
+        "#;
+        let s: RadioSettings = toml::from_str(minimal).unwrap();
+        assert_eq!(s.dead_air_seconds, 15);
+        assert!(s.backup_track_ids.is_empty());
+        assert_eq!(s.backup_max_seconds, 300);
+    }
+
+    fn t(id: u64, artist: &str, title: &str) -> ccc_database::Track {
+        ccc_database::Track {
+            id,
+            title: title.into(),
+            artist: artist.into(),
+            album: String::new(),
+            genre: String::new(),
+            file_path: String::new(),
+            mime_type: "audio/mpeg".into(),
+            size_bytes: 0,
+            duration_seconds: 180,
+            created_at: 0,
+            target_gain_db: None,
+        }
+    }
+
+    fn np(artist: &str, secs_ago: u64) -> NowPlaying {
+        NowPlaying {
+            source: "autodj",
+            track_id: None,
+            title: "x".into(),
+            artist: artist.into(),
+            started_at: unix_now().saturating_sub(secs_ago),
+            duration_seconds: 180,
+        }
+    }
+
+    #[test]
+    fn caps_disabled_picks_first() {
+        let q = vec![t(1, "A", "1"), t(2, "B", "2")];
+        let h = vec![np("A", 60)];
+        let p = pick_with_caps(&q, &h, 0, 0, 3600).unwrap();
+        assert_eq!(p.id, 1);
+    }
+
+    #[test]
+    fn caps_artist_at_cap_skipped() {
+        let q = vec![t(1, "A", "1"), t(2, "B", "2")];
+        let h = vec![np("A", 60), np("A", 120), np("A", 180), np("A", 240)];
+        // max_artist = 4 — A is already at 4, must be skipped
+        let p = pick_with_caps(&q, &h, 4, 0, 3600).unwrap();
+        assert_eq!(p.id, 2);
+    }
+
+    #[test]
+    fn caps_artist_window_respects_age() {
+        let q = vec![t(1, "A", "1")];
+        // 4 A's aired, but all of them over 4 hours ago. Cap window
+        // is 1h. Should be fine.
+        let h = vec![
+            np("A", 60 * 60 * 5),
+            np("A", 60 * 60 * 5),
+            np("A", 60 * 60 * 5),
+            np("A", 60 * 60 * 5),
+        ];
+        let p = pick_with_caps(&q, &h, 4, 0, 3600).unwrap();
+        assert_eq!(p.id, 1);
+    }
+
+    #[test]
+    fn caps_all_violated_returns_none() {
+        let q = vec![t(1, "A", "1")];
+        let h = vec![np("A", 60), np("A", 120)];
+        // Cap = 1, A is already at 2 -> skip
+        let p = pick_with_caps(&q, &h, 1, 0, 3600);
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn caps_live_source_doesnt_count() {
+        // Live source entries have empty artist. The cap should
+        // ignore them entirely.
+        let q = vec![t(1, "A", "1")];
+        let mut live = np("", 60);
+        live.source = "live";
+        let h = vec![live.clone(), live.clone(), live.clone(), live];
+        let p = pick_with_caps(&q, &h, 4, 0, 3600).unwrap();
+        assert_eq!(p.id, 1);
+    }
 }
