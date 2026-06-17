@@ -1,0 +1,294 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}Live Chat — Nuntius{% endblock %}
+
+{% block content %}
+<style>
+  .chat-page {
+    --panel: #14161b;
+    --panel-2: #1c1f26;
+    --rim: #2a2e36;
+    --rim-2: #404652;
+    --ink: #e7eaf0;
+    --ink-dim: #8c93a3;
+    --led-blue: #5b9eff;
+    --led-red: #ff2a2a;
+    --led-green: #3ecf8e;
+    color: var(--ink);
+  }
+  .cms-shell__main { background: linear-gradient(180deg, #0c0d10 0%, #0a0b0e 100%); }
+
+  .chat-page__head { margin-bottom: 18px; }
+  .chat-page__head h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: 0.02em; }
+  .chat-page__head p { margin: 0; color: var(--ink-dim); font-size: 13px; }
+
+  .chat-card {
+    background: linear-gradient(180deg, var(--panel) 0%, #101216 100%);
+    border: 1px solid var(--rim); border-radius: 8px;
+    padding: 22px 24px; margin-bottom: 18px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.5);
+  }
+  .chat-card h2 {
+    margin: 0 0 4px; font-size: 12px; font-weight: 700;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  .chat-card p.lede { margin: 0 0 16px; font-size: 13px; color: var(--ink-dim); }
+
+  .field { display: block; margin-bottom: 18px; }
+  .field:last-child { margin-bottom: 0; }
+  .field__label {
+    display: block; margin-bottom: 6px;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-dim);
+  }
+  .field__hint { display: block; margin-top: 6px; font-size: 12px; color: var(--ink-dim); }
+  .field__hint code { font-family: "Consolas", monospace; padding: 1px 4px; background: #0a0b0e; border-radius: 3px; }
+
+  .field input[type=text],
+  .field input[type=number],
+  .field textarea {
+    width: 100%; max-width: 480px;
+    padding: 10px 12px; border-radius: 4px;
+    background: #0a0b0e; color: var(--ink);
+    border: 1px solid var(--rim);
+    font: 14px/1.4 inherit; font-variant-numeric: tabular-nums;
+  }
+  .field input:focus, .field textarea:focus {
+    outline: none; border-color: var(--led-blue);
+    box-shadow: 0 0 0 3px rgba(91,158,255,0.18);
+  }
+  .field textarea { min-height: 60px; resize: vertical; }
+
+  .toggle {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 12px; border-radius: 6px;
+    background: #0e1015; border: 1px solid var(--rim);
+  }
+  .toggle input[type=checkbox] { margin-top: 3px; transform: scale(1.15); accent-color: var(--led-blue); }
+  .toggle__title { font-weight: 700; font-size: 14px; }
+  .toggle__sub { font-size: 12px; color: var(--ink-dim); margin-top: 3px; }
+
+  .actions {
+    display: flex; gap: 10px; align-items: center;
+    padding-top: 16px; border-top: 1px solid var(--rim); margin-top: 18px;
+  }
+  .btn {
+    padding: 11px 22px; border-radius: 4px;
+    background: linear-gradient(180deg, #2a4d8a, #1c3563);
+    color: white; border: 1px solid #345fab; font-weight: 700; font-size: 13px;
+    letter-spacing: 0.04em; cursor: pointer;
+  }
+  .btn:hover { background: linear-gradient(180deg, #335ca8, #244478); }
+
+  .saved-flash {
+    margin-bottom: 18px; padding: 10px 14px; border-radius: 4px;
+    background: rgba(41, 224, 122, 0.08);
+    border: 1px solid rgba(41, 224, 122, 0.4);
+    color: #b6f3cf; font-size: 13px;
+  }
+
+  .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px; margin-bottom: 18px;
+  }
+  .stat {
+    background: linear-gradient(180deg, var(--panel) 0%, #101216 100%);
+    border: 1px solid var(--rim); border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .stat__label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-dim); margin-bottom: 4px;
+  }
+  .stat__value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat__value--green { color: var(--led-green); }
+  .stat__value--red { color: var(--led-red); }
+  .stat__value--dim { color: var(--ink-dim); }
+
+  .recent {
+    background: linear-gradient(180deg, var(--panel) 0%, #101216 100%);
+    border: 1px solid var(--rim); border-radius: 8px;
+    padding: 4px 0; max-height: 360px; overflow-y: auto;
+  }
+  .recent__row {
+    display: flex; gap: 12px; padding: 8px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 13px;
+  }
+  .recent__row:last-child { border-bottom: 0; }
+  .recent__nick {
+    flex: 0 0 100px; color: var(--led-blue);
+    font-weight: 700; font-family: "Consolas", monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .recent__text { flex: 1; color: var(--ink); }
+  .recent__time { flex: 0 0 130px; color: var(--ink-dim); font-size: 11px; }
+  .recent__empty { padding: 24px; text-align: center; color: var(--ink-dim); font-size: 13px; }
+
+  .lede pre {
+    background: #0a0b0e; padding: 8px 10px; border-radius: 4px;
+    border: 1px solid var(--rim); font-size: 12px; color: var(--ink);
+    margin: 6px 0 0; overflow-x: auto;
+  }
+</style>
+
+<div class="chat-page">
+  <header class="chat-page__head">
+    <h1>Live Listener Chat</h1>
+    <p>Back-channel sidebar for listeners. Messages are ephemeral and live in memory; a station restart clears the room.</p>
+  </header>
+
+  {% if saved %}
+    <div class="saved-flash">Settings saved.</div>
+  {% endif %}
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat__label">Live connections</div>
+      <div class="stat__value {% if live_connections > 0 %}stat__value--green{% else %}stat__value--dim{% endif %}">
+        {{ live_connections }}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">Recent messages</div>
+      <div class="stat__value {% if history_len > 0 %}stat__value--green{% else %}stat__value--dim{% endif %}">
+        {{ history_len }} / {{ history_capacity }}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">Slow mode</div>
+      <div class="stat__value {% if slow_mode_ms > 0 %}stat__value--green{% else %}stat__value--dim{% endif %}">
+        {{ slow_mode_ms }} ms
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">Max length</div>
+      <div class="stat__value stat__value--dim">{{ max_message_length }}</div>
+    </div>
+  </div>
+
+  <form method="post" action="/admin/live-chat">
+
+    <section class="chat-card">
+      <h2>Master switch</h2>
+      <p class="lede">When disabled, the WebSocket endpoint returns 503 and the recent-history endpoint is empty. Existing connections are closed on the next message round-trip.</p>
+
+      <label class="toggle">
+        <input type="checkbox" name="enabled" value="1" {% if enabled %}checked{% endif %}>
+        <span>
+          <span class="toggle__title">Enable live chat</span>
+          <span class="toggle__sub">Off when you want a quiet broadcast (e.g. overnight, automated, or for sensitive content).</span>
+        </span>
+      </label>
+    </section>
+
+    <section class="chat-card">
+      <h2>Rate limits</h2>
+      <p class="lede">Defends the room against spam and noisy clients. None of these limits are per-IP; they're per WebSocket connection.</p>
+
+      <label class="field">
+        <span class="field__label">Slow mode (milliseconds)</span>
+        <input type="number" name="slow_mode_ms" value="{{ slow_mode_ms }}" min="0" max="60000" style="max-width:160px;">
+        <span class="field__hint">Per-connection minimum gap between accepted messages. Default 2000. Set 0 to disable.</span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Max message length (chars)</span>
+        <input type="number" name="max_message_length" value="{{ max_message_length }}" min="1" max="4000" style="max-width:160px;">
+        <span class="field__hint">Default 200. Anything longer is rejected with a "rejected" frame.</span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Max concurrent connections</span>
+        <input type="number" name="max_connections" value="{{ max_connections }}" min="1" max="100000" style="max-width:160px;">
+        <span class="field__hint">Default 200. New connections beyond this are closed immediately.</span>
+      </label>
+    </section>
+
+    <section class="chat-card">
+      <h2>History</h2>
+      <p class="lede">How many recent messages to keep in memory and expose via <code>/api/live-chat/recent</code>. Older messages fall off the end of the ring.</p>
+
+      <label class="field">
+        <span class="field__label">History capacity (messages)</span>
+        <input type="number" name="history_capacity" value="{{ history_capacity }}" min="1" max="5000" style="max-width:160px;">
+        <span class="field__hint">Default 50.</span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Broadcast channel capacity (frames)</span>
+        <input type="number" name="broadcast_capacity" value="{{ broadcast_capacity }}" min="8" max="4096" style="max-width:160px;">
+        <span class="field__hint">Buffer size for the fan-out to connected clients. Slow clients are dropped on overflow.</span>
+      </label>
+    </section>
+
+    <section class="chat-card">
+      <h2>Ban list</h2>
+      <p class="lede">Banned nicks (case-insensitive, comma- or whitespace-separated) have their messages silently dropped. The server still sends them the broadcast — they just can't contribute.</p>
+
+      <label class="field">
+        <span class="field__label">Banned nicks</span>
+        <textarea name="banned_nicks" placeholder="troll42, spammer, karen">{{ banned_nicks_csv }}</textarea>
+        <span class="field__hint">Match is exact-string (case-insensitive). Bans don't expire — clear the field to unban everyone.</span>
+      </label>
+    </section>
+
+    <div class="actions">
+      <button class="btn" type="submit">Save settings</button>
+      <span style="font-size:12px; color: var(--ink-dim);">Settings apply to new messages immediately; existing connections keep the values they were opened with.</span>
+    </div>
+  </form>
+
+  <section class="chat-card" style="margin-top:18px">
+    <h2>Recent messages</h2>
+    <p class="lede">The last {{ recent_count }} messages from the in-memory ring (most recent first). Reset on server restart.</p>
+    {% if recent.is_empty() %}
+      <div class="recent__empty">No messages yet.</div>
+    {% else %}
+      <div class="recent">
+        {% for r in recent %}
+          <div class="recent__row">
+            <div class="recent__nick">{{ r.nick }}</div>
+            <div class="recent__text">{{ r.text }}</div>
+            <div class="recent__time">{{ r.ts_human }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="chat-card" style="margin-top:18px">
+    <h2>How clients connect</h2>
+    <p class="lede">Browser snippet for the public listen page's chat sidebar:</p>
+    <pre>const ws = new WebSocket("ws://your-host/api/live-chat/ws");
+ws.onmessage = (ev) => {
+  const f = JSON.parse(ev.data);
+  if (f.type === "hello")   renderHistory(f.history);
+  if (f.type === "msg")     appendMessage(f);
+  if (f.type === "rejected") toast(f.reason);
+};
+ws.onopen = () => ws.send(JSON.stringify({type:"msg", nick:myNick, text:myInput.value}));</pre>
+  </section>
+</div>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Status</h3>
+  <ul class="cms-rail__list">
+    <li>Enabled: <strong>{% if enabled %}yes{% else %}no{% endif %}</strong></li>
+    <li>Slow mode: <code>{{ slow_mode_ms }} ms</code></li>
+    <li>Max length: <code>{{ max_message_length }}</code></li>
+    <li>History: <code>{{ history_len }}/{{ history_capacity }}</code></li>
+    <li>Banned: <code>{{ banned_count }} nick(s)</code></li>
+  </ul>
+</div>
+<div class="cms-rail__card" style="margin-top:24px">
+  <h3>Endpoints</h3>
+  <ul class="cms-rail__list">
+    <li>WS: <code>/api/live-chat/ws</code></li>
+    <li>JSON: <code>/api/live-chat/recent</code></li>
+    <li>Frame: <code>{"type":"msg","nick":"...","text":"..."}</code></li>
+  </ul>
+</div>
+{% endblock %}

@@ -29,5 +29,6 @@ ccc-plugin-newsletter = { path = "../ccc-plugin-newsletter" }
 ccc-plugin-s3 = { path = "../ccc-plugin-s3" }
 ccc-plugin-seo = { path = "../ccc-plugin-seo" }
 ccc-plugin-stream-watch = { path = "../ccc-plugin-stream-watch" }
+ccc-plugin-live-chat = { path = "../ccc-plugin-live-chat" }
 ccc-plugin-theme-dark-matter = { path = "../ccc-plugin-theme-dark-matter" }
 ccc-plugin-whisper = { path = "../ccc-plugin-whisper" }
