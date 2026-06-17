@@ -181,6 +181,41 @@
     </section>
 
     <section class="eng-card">
+      <h2>Remote presenter ingest (SRT / RTP / RTMP)</h2>
+      <p class="eng-card__lede">
+        Accept an audio stream from a remote co-host or guest's encoder
+        and pump it straight into the broadcast. The AutoDJ yields
+        while bytes are flowing. A live Icecast source connection still
+        preempts the remote presenter. Requires <code>ffmpeg</code>.
+      </p>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Remote presenter URL</span>
+        <input class="eng-input" type="text" name="remote_presenter_url" value="{{ remote_presenter_url }}" placeholder="srt://presenter.example.com:9000?mode=caller">
+        <span class="eng-field__hint">
+          Supported: <code>srt://</code>, <code>rtp://</code>, <code>rtmp://</code>, <code>udp://</code>, <code>tcp://</code>, <code>http(s)://</code>. Clear the field to disable.
+        </span>
+      </label>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Display label</span>
+        <input class="eng-input" type="text" name="remote_presenter_label" value="{{ remote_presenter_label }}" maxlength="80">
+        <span class="eng-field__hint">Shown to listeners in the now-playing readout when the presenter is on-air.</span>
+      </label>
+
+      <label class="eng-field">
+        <span class="eng-field__label">SRT passphrase (optional)</span>
+        <input class="eng-input" type="password" name="remote_presenter_passphrase" value="{{ remote_presenter_passphrase }}" autocomplete="new-password">
+        <span class="eng-field__hint">Only used for SRT URLs. Leave blank for cleartext (testing) or AES-disabled endpoints.</span>
+      </label>
+
+      <div style="padding-top:12px; border-top:1px solid var(--rim); margin-top:6px;">
+        <a class="eng-btn" href="/admin/radio/presenter/stop" onclick="event.preventDefault(); var f=document.createElement('form'); f.method='POST'; f.action='/admin/radio/presenter/stop'; document.body.appendChild(f); f.submit();" style="background: linear-gradient(180deg, #8a2a2a, #631c1c); border-color:#bf3434; text-decoration:none; display:inline-block;">End the call now</a>
+        <span style="font-size:12px; color: var(--ink-dim); margin-left:10px;">Drops the URL so the ingest stops on the next iteration.</span>
+      </div>
+    </section>
+
+    <section class="eng-card">
       <h2>AutoDJ encoder</h2>
       <p class="eng-card__lede">Output bitrate when re-encoding library tracks. Higher = better quality, more bandwidth per listener. Requires <code>ffmpeg</code>.</p>
 

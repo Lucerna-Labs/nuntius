@@ -143,6 +143,27 @@ pub struct RadioSettings {
     /// typically thinks about.
     #[serde(default = "default_cap_window_hours")]
     pub cap_window_hours: u64,
+    /// Optional SRT/RTP/RTMP URL of a remote presenter's encoder.
+    /// When set, a background task pulls bytes from it via ffmpeg and
+    /// pumps them into the broadcast channel. Live source connections
+    /// and the AutoDJ preempt it; clearing the field disables the
+    /// ingest. Examples:
+    ///   `srt://presenter.example.com:9000?mode=caller&passphrase=secret`
+    ///   `rtp://239.0.0.1:5004`
+    ///   `rtmp://presenter.example.com/live/streamkey`
+    /// Empty string = disabled.
+    #[serde(default)]
+    pub remote_presenter_url: String,
+    /// Human-readable label shown in the public now-playing readout
+    /// when the remote presenter's stream is airing. Listeners see
+    /// "[remote] <label>". Defaults to "Remote Presenter".
+    #[serde(default = "default_remote_presenter_label")]
+    pub remote_presenter_label: String,
+    /// Optional passphrase for SRT mode. When set, the engine passes
+    /// `-passphrase` to ffmpeg on the SRT caller. Most public SRT
+    /// endpoints use a passphrase. Empty = no encryption.
+    #[serde(default)]
+    pub remote_presenter_passphrase: String,
 }
 
 fn default_dead_air_seconds() -> u64 {
@@ -159,6 +180,9 @@ fn default_max_album_in_window() -> u32 {
 }
 fn default_cap_window_hours() -> u64 {
     3
+}
+fn default_remote_presenter_label() -> String {
+    "Remote Presenter".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +225,9 @@ impl Default for RadioSettings {
             max_artist_in_window: default_max_artist_in_window(),
             max_album_in_window: default_max_album_in_window(),
             cap_window_hours: default_cap_window_hours(),
+            remote_presenter_url: String::new(),
+            remote_presenter_label: default_remote_presenter_label(),
+            remote_presenter_passphrase: String::new(),
         }
     }
 }
@@ -286,6 +313,11 @@ pub(crate) struct EngineState {
     /// True iff the relay task currently has an upstream connection
     /// and is pumping bytes. AutoDJ pauses when relay_alive == true.
     pub(crate) relay_alive: Arc<AtomicBool>,
+    /// True iff the remote-presenter ingest task currently has an
+    /// active ffmpeg subprocess and is pumping bytes. AutoDJ pauses
+    /// when presenter_alive == true. Preempted by live source and the
+    /// standard Icecast relay.
+    pub(crate) presenter_alive: Arc<AtomicBool>,
     /// Map from variant mount path → its dedicated broadcast channel.
     /// One ffmpeg subprocess per variant transcodes the master stream.
     variants: Arc<RwLock<std::collections::HashMap<String, broadcast::Sender<Bytes>>>>,
@@ -395,6 +427,7 @@ impl RadioEnginePlugin {
             ))),
             recording: Arc::new(RwLock::new(None)),
             relay_alive: Arc::new(AtomicBool::new(false)),
+            presenter_alive: Arc::new(AtomicBool::new(false)),
             variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
             spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
@@ -451,6 +484,7 @@ impl RadioEnginePlugin {
             ))),
             recording: Arc::new(RwLock::new(None)),
             relay_alive: Arc::new(AtomicBool::new(false)),
+            presenter_alive: Arc::new(AtomicBool::new(false)),
             variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
             spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
@@ -521,7 +555,8 @@ impl Plugin for RadioEnginePlugin {
             .map(|v| v.len())
             .unwrap_or(0);
 
-        let state = if live || relay || np.is_some() {
+        let presenter = self.state.presenter_alive.load(Ordering::SeqCst);
+        let state = if live || relay || presenter || np.is_some() {
             PluginLifecycle::Live
         } else {
             PluginLifecycle::Configured
@@ -538,6 +573,7 @@ impl Plugin for RadioEnginePlugin {
                 "configured": true,
                 "live": live,
                 "relay": relay,
+                "presenter": presenter,
                 "autodj_paused": autodj_paused,
                 "config": {
                     "port": snap.port,
@@ -548,6 +584,7 @@ impl Plugin for RadioEnginePlugin {
                     "normalization": snap.apply_loudness_normalization,
                     "library_dir": snap.library_dir,
                     "relay_url": snap.relay_url,
+                    "remote_presenter_url": snap.remote_presenter_url,
                 },
                 "health": {
                     "listeners": listeners,
@@ -589,6 +626,7 @@ impl Plugin for RadioEnginePlugin {
                 .route("/radio", get(public_listen))
                 .route("/api/radio/nowplaying", get(public_now_playing))
                 .route("/api/radio/library", get(public_library))
+                .route("/api/radio/presenter", get(public_presenter_status))
                 .route("/api/radio/nowplaying/stream", get(nowplaying::ws_handler))
                 .route("/api/radio/nowplaying/sse", get(nowplaying::sse_handler))
                 .with_state(st_arc),
@@ -615,6 +653,7 @@ impl Plugin for RadioEnginePlugin {
         spawn_autodj((*st_arc).clone(), shutdown.clone());
         spawn_recorder((*st_arc).clone(), shutdown.clone());
         spawn_relay((*st_arc).clone(), shutdown.clone());
+        spawn_remote_presenter((*st_arc).clone(), shutdown.clone());
         spawn_variant_transcoders((*st_arc).clone(), shutdown.clone());
         Some(
             Router::new()
@@ -649,6 +688,7 @@ impl Plugin for RadioEnginePlugin {
                 .route("/radio/record/stop", post(admin_record_stop))
                 .route("/radio/autodj/pause", post(admin_autodj_pause))
                 .route("/radio/autodj/resume", post(admin_autodj_resume))
+                .route("/radio/presenter/stop", post(admin_presenter_stop))
                 .layer(axum::extract::DefaultBodyLimit::max(
                     library::MAX_TRACK_BYTES,
                 ))
@@ -995,6 +1035,9 @@ struct AdminEngineeringPage {
     content_type: String,
     stream_name: String,
     relay_url: String,
+    remote_presenter_url: String,
+    remote_presenter_label: String,
+    remote_presenter_passphrase: String,
     station_bitrate_kbps: u32,
     apply_loudness_normalization: bool,
     crossfade_seconds: u32,
@@ -1032,6 +1075,9 @@ async fn admin_engineering_get(
         content_type: snap.content_type,
         stream_name: snap.stream_name,
         relay_url: snap.relay_url,
+        remote_presenter_url: snap.remote_presenter_url,
+        remote_presenter_label: snap.remote_presenter_label,
+        remote_presenter_passphrase: snap.remote_presenter_passphrase,
         station_bitrate_kbps: snap.station_bitrate_kbps,
         apply_loudness_normalization: snap.apply_loudness_normalization,
         crossfade_seconds: snap.crossfade_seconds,
@@ -1053,6 +1099,12 @@ struct SettingsForm {
     stream_name: String,
     #[serde(default)]
     relay_url: String,
+    #[serde(default)]
+    remote_presenter_url: String,
+    #[serde(default)]
+    remote_presenter_label: String,
+    #[serde(default)]
+    remote_presenter_passphrase: String,
     #[serde(default)]
     station_bitrate_kbps: Option<u32>,
     #[serde(default)]
@@ -1083,6 +1135,21 @@ async fn admin_post(
     snap.content_type = form.content_type.trim().to_string();
     snap.stream_name = form.stream_name.trim().to_string();
     snap.relay_url = form.relay_url.trim().to_string();
+    match validate_presenter_url(&form.remote_presenter_url) {
+        Ok(normalized) => snap.remote_presenter_url = normalized,
+        Err(e) => {
+            // Refuse to save a bogus URL — we don't want a typo to
+            // spawn a runaway ffmpeg process.
+            eprintln!("[radio-engine] rejecting bad remote_presenter_url: {}", e);
+            snap.remote_presenter_url = form.remote_presenter_url.trim().to_string();
+        }
+    }
+    snap.remote_presenter_label = if form.remote_presenter_label.trim().is_empty() {
+        default_remote_presenter_label()
+    } else {
+        form.remote_presenter_label.trim().to_string()
+    };
+    snap.remote_presenter_passphrase = form.remote_presenter_passphrase.to_string();
     if let Some(b) = form.station_bitrate_kbps {
         snap.station_bitrate_kbps = b.clamp(32, 320);
     }
@@ -1142,6 +1209,18 @@ async fn public_library(State(state): State<Arc<EngineState>>) -> Response {
     Json(rows).into_response()
 }
 
+async fn public_presenter_status(State(state): State<Arc<EngineState>>) -> Response {
+    let snap = state.settings.snapshot();
+    Json(serde_json::json!({
+        "configured": !snap.remote_presenter_url.is_empty(),
+        "url": snap.remote_presenter_url,
+        "label": snap.remote_presenter_label,
+        "active": state.presenter_alive.load(Ordering::SeqCst),
+        "ts": unix_now(),
+    }))
+    .into_response()
+}
+
 async fn public_now_playing(State(state): State<Arc<EngineState>>) -> Response {
     let snap = state
         .now_playing
@@ -1167,6 +1246,7 @@ async fn public_now_playing(State(state): State<Arc<EngineState>>) -> Response {
         "history": history,
         "live": state.source_alive.load(Ordering::SeqCst),
         "relay": state.relay_alive.load(Ordering::SeqCst),
+        "presenter": state.presenter_alive.load(Ordering::SeqCst),
         "autodj_paused": state.autodj_paused.load(Ordering::SeqCst),
         "recording": recording,
         "listeners": state.listener_count.load(Ordering::SeqCst),
@@ -1379,6 +1459,14 @@ async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::Cancellatio
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         }
+        if state.presenter_alive.load(Ordering::SeqCst) {
+            // The remote-presenter ingest is pushing bytes. The
+            // presenter task itself manages the now-playing entry;
+            // we just sleep to let the operator know the AutoDJ is
+            // yielding.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
 
         // When crossfade is enabled, prefer the PCM-mixed pipeline:
         // a single persistent ffmpeg encoder with per-track decoders
@@ -1450,7 +1538,9 @@ async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::Cancellatio
                 *state.now_playing.write().expect("np poisoned") = None;
                 break;
             }
-            if state.source_alive.load(Ordering::SeqCst) || state.relay_alive.load(Ordering::SeqCst)
+            if state.source_alive.load(Ordering::SeqCst)
+                || state.relay_alive.load(Ordering::SeqCst)
+                || state.presenter_alive.load(Ordering::SeqCst)
             {
                 break;
             }
@@ -1888,6 +1978,184 @@ async fn relay_once(state: &EngineState, url_str: &str) -> Result<(), String> {
 }
 
 // ============================================================================
+// Remote presenter ingest — pulls an SRT/RTP/RTMP URL via ffmpeg and
+// pumps the bytes into the broadcast channel. This is the "remote
+// guest" / "remote co-host" feature. Live source connections and the
+// standard Icecast relay preempt it; clearing `remote_presenter_url`
+// disables it. The AutoDJ is paused while bytes are flowing.
+// ============================================================================
+
+fn spawn_remote_presenter(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    state.spawn_once("remote_presenter", move |st| async move {
+        remote_presenter_loop(st, shutdown).await;
+    });
+}
+
+async fn remote_presenter_loop(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    loop {
+        if shutdown.is_cancelled() {
+            break;
+        }
+        let snap = state.settings.snapshot();
+        let url = snap.remote_presenter_url.clone();
+        let label = snap.remote_presenter_label.clone();
+        let passphrase = snap.remote_presenter_passphrase.clone();
+        if url.is_empty() {
+            // Disabled — idle until the operator configures a URL.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+        // Don't compete with a live source or the Icecast relay.
+        if state.source_alive.load(Ordering::SeqCst) || state.relay_alive.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+        // Surface the presenter in the public now-playing view.
+        *state.now_playing.write().expect("np poisoned") = Some(NowPlaying {
+            source: "remote_presenter",
+            track_id: None,
+            title: label.clone(),
+            artist: "Remote presenter is on-air".into(),
+            started_at: unix_now(),
+            duration_seconds: 0,
+        });
+        match remote_presenter_once(&state, &url, &passphrase).await {
+            Ok(()) => {
+                // Upstream closed cleanly (operator ended the call,
+                // ffmpeg reached EOF, or we yielded to a live source).
+                state.presenter_alive.store(false, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(e) => {
+                state.presenter_alive.store(false, Ordering::SeqCst);
+                eprintln!("[radio-engine] remote presenter error from {}: {}", url, e);
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+    }
+}
+
+/// One full ingest attempt. Spawns `ffmpeg -i <url> -f mp3 -` and
+/// pumps its stdout into the broadcast channel. Returns Ok(()) on a
+/// clean EOF or a graceful preemption, Err on a real ffmpeg failure.
+async fn remote_presenter_once(
+    state: &EngineState,
+    url_str: &str,
+    passphrase: &str,
+) -> Result<(), String> {
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt as _;
+    use tokio::process::Command;
+
+    // Sanity-check the URL scheme so we can give a friendly error
+    // message before spawning ffmpeg. Any non-empty URL is ffmpeg's
+    // problem; we just want to catch obvious typos up front.
+    let parsed = url::Url::parse(url_str).map_err(|e| format!("bad URL: {}", e))?;
+    let scheme = parsed.scheme();
+    if !matches!(
+        scheme,
+        "srt" | "rtp" | "rtmp" | "udp" | "tcp" | "http" | "https"
+    ) {
+        return Err(format!(
+            "unsupported scheme '{}'; expected srt://, rtp://, rtmp://, udp://, tcp://, or http(s)://",
+            scheme
+        ));
+    }
+
+    let snap = state.settings.snapshot();
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-re")
+        // `-re` reads input at native rate; harmless for live and
+        // protects against the caller forcing a fast drain.
+        .arg("-i")
+        .arg(url_str);
+    // SRT passphrase (encryption). The argument is harmless when the
+    // URL isn't SRT, but ffmpeg logs a warning, so we only pass it
+    // when the scheme is srt.
+    if scheme == "srt" && !passphrase.is_empty() {
+        cmd.arg("-passphrase").arg(passphrase);
+    }
+    cmd.arg("-c:a")
+        .arg("libmp3lame")
+        .arg("-b:a")
+        .arg(format!("{}k", snap.station_bitrate_kbps))
+        .arg("-f")
+        .arg("mp3")
+        .arg("-")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("ffmpeg spawn failed: {}", e))?;
+    let mut stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => return Err("ffmpeg had no stdout".into()),
+    };
+    let stderr = child.stderr.take();
+
+    state.presenter_alive.store(true, Ordering::SeqCst);
+    println!("[radio-engine] remote presenter connected: {}", url_str);
+
+    // Drain stderr in a side task so a noisy ffmpeg doesn't deadlock
+    // its stdout pipe. We log only the first error line, then drop the
+    // rest — ffmpeg's error spew isn't useful to operators.
+    let stderr_state = state.clone();
+    let stderr_task = tokio::spawn(async move {
+        if let Some(mut s) = stderr {
+            use tokio::io::AsyncBufReadExt as _;
+            let mut reader = tokio::io::BufReader::new(&mut s);
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line).await;
+            if !line.trim().is_empty() {
+                eprintln!("[radio-engine] ffmpeg: {}", line.trim());
+                stderr_state.presenter_alive.store(false, Ordering::SeqCst);
+            }
+        }
+    });
+
+    let mut buf = vec![0u8; 4096];
+    loop {
+        // If a live source connects, yield.
+        if state.source_alive.load(Ordering::SeqCst) {
+            println!("[radio-engine] remote presenter yielding to live source");
+            let _ = child.kill().await;
+            let _ = stderr_task.await;
+            return Ok(());
+        }
+        // If the Icecast relay has come up, yield.
+        if state.relay_alive.load(Ordering::SeqCst) {
+            let _ = child.kill().await;
+            let _ = stderr_task.await;
+            return Ok(());
+        }
+        // If the operator cleared the URL, stop the ingest.
+        if state.settings.snapshot().remote_presenter_url != url_str {
+            let _ = child.kill().await;
+            let _ = stderr_task.await;
+            return Ok(());
+        }
+        match stdout.read(&mut buf).await {
+            Ok(0) => {
+                // ffmpeg reached EOF or closed the pipe.
+                break;
+            }
+            Ok(n) => {
+                let _ = state.tx.send(Bytes::copy_from_slice(&buf[..n]));
+            }
+            Err(_) => break,
+        }
+    }
+
+    let _ = child.wait().await;
+    let _ = stderr_task.await;
+    Ok(())
+}
+
+// ============================================================================
 // Recording — dumps every broadcast byte to disk while enabled
 // ============================================================================
 
@@ -1997,6 +2265,20 @@ async fn admin_autodj_resume(State(state): State<Arc<EngineState>>) -> Response 
     Redirect::to("/admin/radio-engine/radio").into_response()
 }
 
+/// Drop the currently-configured remote-presenter URL so the ingest
+/// task stops trying to connect on the next iteration. Useful for
+/// "end the call" buttons. We don't kill the live ffmpeg process
+/// here — it will see the URL no longer matches on its next yield
+/// check and exit on its own.
+async fn admin_presenter_stop(State(state): State<Arc<EngineState>>) -> Response {
+    let mut snap = state.settings.snapshot();
+    snap.remote_presenter_url = String::new();
+    let _ = state.settings.replace(snap);
+    state.presenter_alive.store(false, Ordering::SeqCst);
+    println!("[radio-engine] remote presenter stopped by operator");
+    Redirect::to("/admin/radio-engine/radio/engineering?saved=1").into_response()
+}
+
 pub(crate) fn push_history(state: &EngineState, entry: NowPlaying) {
     let mut h = state.history.write().expect("history poisoned");
     if h.len() >= HISTORY_CAPACITY {
@@ -2084,6 +2366,7 @@ async fn stream_track(state: &EngineState, track: &Track) {
         if state.autodj_paused.load(Ordering::SeqCst)
             || state.source_alive.load(Ordering::SeqCst)
             || state.relay_alive.load(Ordering::SeqCst)
+            || state.presenter_alive.load(Ordering::SeqCst)
         {
             let _ = child.kill().await;
             break;
@@ -2120,6 +2403,7 @@ async fn stream_track_raw_pacing(state: &EngineState, track: &Track) {
         if state.autodj_paused.load(Ordering::SeqCst)
             || state.source_alive.load(Ordering::SeqCst)
             || state.relay_alive.load(Ordering::SeqCst)
+            || state.presenter_alive.load(Ordering::SeqCst)
         {
             break;
         }
@@ -2231,6 +2515,35 @@ fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
 
 fn is_leap(y: u32) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
+}
+
+/// Validate a `remote_presenter_url` value before the engine tries to
+/// spawn ffmpeg against it. Returns `Ok(normalized)` for acceptable
+/// inputs and `Err(reason)` for bad ones. Used by the admin form
+/// (so the operator gets a friendly error before clicking Save) and
+/// by the ingest task (defence in depth — the URL could have been
+/// hand-edited in `radio.toml`).
+pub fn validate_presenter_url(s: &str) -> Result<String, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        // Empty == disabled. Not an error.
+        return Ok(String::new());
+    }
+    let parsed = url::Url::parse(trimmed).map_err(|e| format!("bad URL: {}", e))?;
+    let scheme = parsed.scheme();
+    if !matches!(
+        scheme,
+        "srt" | "rtp" | "rtmp" | "udp" | "tcp" | "http" | "https"
+    ) {
+        return Err(format!(
+            "unsupported scheme '{}'; expected srt://, rtp://, rtmp://, udp://, tcp://, or http(s)://",
+            scheme
+        ));
+    }
+    if parsed.host_str().is_none_or(|h| h.is_empty()) {
+        return Err("URL must include a host".into());
+    }
+    Ok(trimmed.to_string())
 }
 
 #[cfg(test)]
@@ -2367,5 +2680,101 @@ mod tests {
         let h = vec![live.clone(), live.clone(), live.clone(), live];
         let p = pick_with_caps(&q, &h, 4, 0, 3600).unwrap();
         assert_eq!(p.id, 1);
+    }
+
+    // ---- Remote presenter ingest --------------------------------------
+
+    #[test]
+    fn presenter_url_validate_accepts_supported_schemes() {
+        let cases = [
+            "srt://presenter.example.com:9000?mode=caller",
+            "rtp://239.0.0.1:5004",
+            "rtmp://presenter.example.com/live/key",
+            "udp://239.0.0.1:5004",
+            "tcp://stream.example.com:9000",
+            "http://stream.example.com/listen.mp3",
+            "https://stream.example.com/listen.mp3",
+        ];
+        for c in cases {
+            let out = validate_presenter_url(c).expect(c);
+            assert_eq!(out, c, "validator round-tripped input for {}", c);
+        }
+    }
+
+    #[test]
+    fn presenter_url_empty_means_disabled_not_error() {
+        assert_eq!(validate_presenter_url("").unwrap(), "");
+        assert_eq!(validate_presenter_url("   ").unwrap(), "");
+    }
+
+    #[test]
+    fn presenter_url_rejects_unknown_scheme() {
+        let err = validate_presenter_url("ftp://nope.example.com").unwrap_err();
+        assert!(err.contains("unsupported scheme"), "got: {}", err);
+    }
+
+    #[test]
+    fn presenter_url_rejects_missing_host() {
+        let err = validate_presenter_url("srt://").unwrap_err();
+        assert!(err.contains("host"), "got: {}", err);
+    }
+
+    #[test]
+    fn presenter_url_rejects_garbage() {
+        let err = validate_presenter_url("not a url at all").unwrap_err();
+        assert!(
+            err.contains("bad URL") || err.contains("host"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn settings_default_has_presenter_fields_disabled() {
+        let s = RadioSettings::default();
+        assert!(s.remote_presenter_url.is_empty());
+        assert_eq!(s.remote_presenter_label, "Remote Presenter");
+        assert!(s.remote_presenter_passphrase.is_empty());
+    }
+
+    #[test]
+    fn settings_toml_round_trip_with_presenter() {
+        let s = RadioSettings {
+            remote_presenter_url: "srt://presenter.example.com:9000".into(),
+            remote_presenter_label: "Ondřej from Prague".into(),
+            remote_presenter_passphrase: "secret123".into(),
+            ..RadioSettings::default()
+        };
+        let toml = toml::to_string(&s).unwrap();
+        let back: RadioSettings = toml::from_str(&toml).unwrap();
+        assert_eq!(back.remote_presenter_url, s.remote_presenter_url);
+        assert_eq!(back.remote_presenter_label, s.remote_presenter_label);
+        assert_eq!(
+            back.remote_presenter_passphrase,
+            s.remote_presenter_passphrase
+        );
+    }
+
+    #[test]
+    fn settings_back_compat_when_presenter_keys_missing() {
+        // Existing radio.toml files in the wild don't have these
+        // fields. They must deserialize cleanly with defaults.
+        let minimal = r#"
+            port = 8000
+            mount_path = "/listen.mp3"
+            source_password = "x"
+            content_type = "audio/mpeg"
+            stream_name = "Test"
+        "#;
+        let s: RadioSettings = toml::from_str(minimal).unwrap();
+        assert!(s.remote_presenter_url.is_empty());
+        assert_eq!(s.remote_presenter_label, "Remote Presenter");
+        assert!(s.remote_presenter_passphrase.is_empty());
+    }
+
+    #[test]
+    fn presenter_url_trims_whitespace() {
+        let out = validate_presenter_url("  srt://h:9000  ").unwrap();
+        assert_eq!(out, "srt://h:9000");
     }
 }
