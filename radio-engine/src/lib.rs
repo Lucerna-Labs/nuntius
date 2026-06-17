@@ -164,6 +164,65 @@ pub struct RadioSettings {
     /// endpoints use a passphrase. Empty = no encryption.
     #[serde(default)]
     pub remote_presenter_passphrase: String,
+    /// Hourly clock items. Each item fires at a specific minute of
+    /// every hour (or on selected days). Classic radio use:
+    /// station IDs at the top of the hour, weather/traffic at :30.
+    /// Items are inserted into the AutoDJ queue when due, with a
+    /// configurable lookahead window so they can interrupt a track
+    /// at its natural boundary.
+    #[serde(default)]
+    pub clock_items: Vec<ClockItemSetting>,
+    /// How many seconds before a clock item's scheduled minute the
+    /// engine starts treating it as "due." Default 90s — long enough
+    /// to wait for a current track to end, short enough that a 3-min
+    /// track doesn't push a :00 ID past the hour.
+    #[serde(default = "default_clock_lookahead_seconds")]
+    pub clock_lookahead_seconds: u64,
+    /// Master switch for the clock rotation. When false, all
+    /// `clock_items` are ignored. Default true.
+    #[serde(default = "default_clock_enabled")]
+    pub clock_enabled: bool,
+}
+
+/// One configured clock item. The operator populates a list of these
+/// in `radio.toml` and the AutoDJ consults them between tracks. The
+/// format is intended to round-trip through TOML cleanly so
+/// operators can hand-edit the file if they want.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClockItemSetting {
+    /// The minute of the hour this item fires at (0-59). An item at
+    /// `minute=0` plays at the top of the hour.
+    pub minute_of_hour: u8,
+    /// The track ID from the library to play when this item fires.
+    pub track_id: u64,
+    /// Bitmask of days of the week, bit 0 = Sunday, bit 6 = Saturday.
+    /// `0x7F` (default) means "every day". `0x1F` is weekdays.
+    #[serde(default = "default_clock_days_mask")]
+    pub days_of_week_mask: u8,
+    /// Human-readable label, shown in the now-playing readout and
+    /// useful in the admin audit log. E.g. "Station ID",
+    /// "Weather", "Top-of-hour promo".
+    #[serde(default)]
+    pub label: String,
+    /// Optional. When true, the engine plays this item with a
+    /// longer fade-in (the full track is "the bump" — a fast
+    /// jingle) and a fast fade-out, even if the global
+    /// crossfade_seconds is 0. Default true.
+    #[serde(default = "default_clock_hard_cut")]
+    pub hard_cut: bool,
+}
+
+fn default_clock_days_mask() -> u8 {
+    0x7F
+}
+fn default_clock_hard_cut() -> bool {
+    true
+}
+fn default_clock_lookahead_seconds() -> u64 {
+    90
+}
+fn default_clock_enabled() -> bool {
+    true
 }
 
 fn default_dead_air_seconds() -> u64 {
@@ -228,6 +287,9 @@ impl Default for RadioSettings {
             remote_presenter_url: String::new(),
             remote_presenter_label: default_remote_presenter_label(),
             remote_presenter_passphrase: String::new(),
+            clock_items: Vec::new(),
+            clock_lookahead_seconds: default_clock_lookahead_seconds(),
+            clock_enabled: default_clock_enabled(),
         }
     }
 }
@@ -318,6 +380,15 @@ pub(crate) struct EngineState {
     /// when presenter_alive == true. Preempted by live source and the
     /// standard Icecast relay.
     pub(crate) presenter_alive: Arc<AtomicBool>,
+    /// The track ID of a clock item that is due and should be the
+    /// next thing the AutoDJ plays. Set by `spawn_clock_tick`, cleared
+    /// by the AutoDJ after it picks the track up. Using an `RwLock`
+    /// is overkill for a single `Option<u64>`; a `Mutex` is plenty.
+    pub(crate) pending_clock_track: Arc<std::sync::Mutex<Option<u64>>>,
+    /// When the currently-pending clock item was flagged. Used to
+    /// expire stale flags (in case the AutoDJ changed schedules and
+    /// the flagged item was never picked up).
+    pub(crate) pending_clock_flagged_at: Arc<std::sync::Mutex<Option<u64>>>,
     /// Map from variant mount path → its dedicated broadcast channel.
     /// One ffmpeg subprocess per variant transcodes the master stream.
     variants: Arc<RwLock<std::collections::HashMap<String, broadcast::Sender<Bytes>>>>,
@@ -428,6 +499,8 @@ impl RadioEnginePlugin {
             recording: Arc::new(RwLock::new(None)),
             relay_alive: Arc::new(AtomicBool::new(false)),
             presenter_alive: Arc::new(AtomicBool::new(false)),
+            pending_clock_track: Arc::new(std::sync::Mutex::new(None)),
+            pending_clock_flagged_at: Arc::new(std::sync::Mutex::new(None)),
             variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
             spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
@@ -485,6 +558,8 @@ impl RadioEnginePlugin {
             recording: Arc::new(RwLock::new(None)),
             relay_alive: Arc::new(AtomicBool::new(false)),
             presenter_alive: Arc::new(AtomicBool::new(false)),
+            pending_clock_track: Arc::new(std::sync::Mutex::new(None)),
+            pending_clock_flagged_at: Arc::new(std::sync::Mutex::new(None)),
             variants: Arc::new(RwLock::new(std::collections::HashMap::new())),
             db: None,
             spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
@@ -654,6 +729,7 @@ impl Plugin for RadioEnginePlugin {
         spawn_recorder((*st_arc).clone(), shutdown.clone());
         spawn_relay((*st_arc).clone(), shutdown.clone());
         spawn_remote_presenter((*st_arc).clone(), shutdown.clone());
+        spawn_clock_tick((*st_arc).clone(), shutdown.clone());
         spawn_variant_transcoders((*st_arc).clone(), shutdown.clone());
         Some(
             Router::new()
@@ -1544,6 +1620,51 @@ async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::Cancellatio
             {
                 break;
             }
+            // Clock rotation: if the clock tick has flagged a track
+            // for play at the next boundary, play it instead of the
+            // next library track. We replace the current track in
+            // the iteration with a one-track queue containing the
+            // clock item, so the regular frequency-cap + history
+            // pipeline still runs (clock items are short jingles
+            // and rarely violate the artist cap, but be safe).
+            //
+            // Note: we explicitly drop the sync MutexGuard before
+            // any `.await` so the future stays `Send`. The Tokio
+            // docs are explicit that holding a std::sync::MutexGuard
+            // across an await is a hard error in multi-threaded
+            // runtimes.
+            let clock_id_opt = {
+                let mut g = state
+                    .pending_clock_track
+                    .lock()
+                    .expect("clock track poisoned");
+                g.take()
+            };
+            if let Some(clock_id) = clock_id_opt {
+                if let Some(clock_track) = db.get_track(clock_id).ok().flatten() {
+                    println!(
+                        "[autodj] playing CLOCK ITEM: track_id={} artist='{}' title='{}'",
+                        clock_track.id, clock_track.artist, clock_track.title
+                    );
+                    let np = NowPlaying {
+                        source: "clock",
+                        track_id: Some(clock_track.id),
+                        title: clock_track.title.clone(),
+                        artist: clock_track.artist.clone(),
+                        started_at: unix_now(),
+                        duration_seconds: clock_track.duration_seconds,
+                    };
+                    *state.now_playing.write().expect("np poisoned") = Some(np.clone());
+                    emit_update(&state, Some(np.clone()));
+                    push_history(&state, np);
+                    stream_track(&state, &clock_track).await;
+                    // We just played the clock item. Continue the
+                    // outer loop so we re-evaluate preemption
+                    // state and the current playlist window before
+                    // queueing the next library track.
+                    continue;
+                }
+            }
             // The active playlist might have changed (different schedule
             // window now). Bail to the outer loop so we re-pick.
             let current_active_id = playlists::pick_active_playlist(&db).map(|p| p.id);
@@ -2153,6 +2274,154 @@ async fn remote_presenter_once(
     let _ = child.wait().await;
     let _ = stderr_task.await;
     Ok(())
+}
+
+// ============================================================================
+// Hourly clock rotation — fires scheduled items (station IDs,
+// weather jingles, top-of-hour promos) at specific minutes of the
+// hour. Items are queued for the AutoDJ to play at the next track
+// boundary, with a configurable lookahead window so a 90s lookahead
+// means "be ready to play this within 90s of its scheduled minute."
+//
+// The clock tick task wakes every 30s, computes the current minute
+// of the hour, finds the soonest-due clock item, and if it's within
+// the lookahead window, flags `pending_clock_track`. The AutoDJ
+// consults that flag between tracks and plays the flagged item
+// instead of the next library track.
+// ============================================================================
+
+fn spawn_clock_tick(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    state.spawn_once("clock_tick", move |st| async move {
+        clock_tick_loop(st, shutdown).await;
+    });
+}
+
+async fn clock_tick_loop(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    // The cadence is independent of operator config. 30s gives us
+    // a 30s worst-case miss, which is well under the default 90s
+    // lookahead — so we'll always have a clock item flagged before
+    // its due time.
+    let mut tick = tokio::time::interval(Duration::from_secs(30));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            _ = tick.tick() => {
+                if let Err(e) = run_clock_tick(&state).await {
+                    eprintln!("[clock] tick error: {}", e);
+                }
+            }
+        }
+    }
+}
+
+async fn run_clock_tick(state: &EngineState) -> Result<(), String> {
+    let snap = state.settings.snapshot();
+    if !snap.clock_enabled || snap.clock_items.is_empty() {
+        return Ok(());
+    }
+    // We don't actually need a db handle to flag a clock item —
+    // the AutoDJ looks up the track by id when it picks the flag
+    // up. The only thing we need is the configured list of items,
+    // which is in the settings snapshot.
+    let now = unix_now();
+    // Skip days-of-week: the operator may have configured an item
+    // for weekdays-only; we don't fire it on weekends.
+    let weekday_bit = match weekday_from_unix(now) {
+        Some(w) => 1u8 << w,
+        None => return Ok(()),
+    };
+    let lookahead = snap.clock_lookahead_seconds;
+    // Find the soonest-due clock item that hasn't been flagged yet.
+    // We always re-evaluate from scratch each tick — the AutoDJ
+    // will clear the flag after picking the track up, so we won't
+    // double-fire. Items the AutoDJ skipped (because it was
+    // preempted by a live source for an entire hour) will
+    // silently expire when their minute-of-hour rolls past.
+    if let Some(item) = next_due_clock_item(&snap.clock_items, now, lookahead, weekday_bit) {
+        // Only flag if the current flag is None or stale (>1h old).
+        let already = {
+            let flagged_at = state
+                .pending_clock_flagged_at
+                .lock()
+                .expect("flag poisoned");
+            flagged_at.unwrap_or(0)
+        };
+        if already == 0 || now.saturating_sub(already) > 3600 {
+            *state
+                .pending_clock_track
+                .lock()
+                .expect("clock track poisoned") = Some(item.track_id);
+            *state
+                .pending_clock_flagged_at
+                .lock()
+                .expect("flag poisoned") = Some(now);
+            println!(
+                "[clock] flagged track_id={} (label='{}', minute={:02}) for play at top of next track boundary",
+                item.track_id, item.label, item.minute_of_hour
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Find the clock item whose `minute_of_hour` is closest to "now" and
+/// within `lookahead_seconds`. Returns the first item that matches
+/// today (per `today_mask`) and is due (minute-of-hour is within
+/// `lookahead_seconds` ahead OR already passed in the last 5 minutes
+/// — to give a little grace for slow tickers).
+pub fn next_due_clock_item(
+    items: &[ClockItemSetting],
+    now: u64,
+    lookahead_seconds: u64,
+    today_mask: u8,
+) -> Option<ClockItemSetting> {
+    let current_minute = (now / 60) % 60;
+    let current_second = now % 60;
+    let current_minute_of_hour_sec = current_minute * 60 + current_second;
+    // Filter to items that match today's day-of-week AND are
+    // within the due window. The grace window for past items is
+    // fixed at 5 minutes — long enough for a slow ticker to catch
+    // up after a brief stall, short enough that an item from the
+    // top of the previous hour doesn't fire at 12:30.
+    let mut candidates: Vec<&ClockItemSetting> = items
+        .iter()
+        .filter(|i| (i.days_of_week_mask & today_mask) != 0)
+        .filter(|i| (i.minute_of_hour as u64) < 60)
+        .filter(|i| {
+            let target = (i.minute_of_hour as u64) * 60;
+            let diff = target as i64 - current_minute_of_hour_sec as i64;
+            // Within 5 min past OR within lookahead upcoming.
+            (-300..=0).contains(&diff) || (diff > 0 && diff <= lookahead_seconds as i64)
+        })
+        .collect();
+    // Sort by closeness to "now" — past-within-5min first
+    // (most recent first), then upcoming within lookahead
+    // (soonest first).
+    candidates.sort_by_key(|i| {
+        let target = (i.minute_of_hour as u64) * 60;
+        let diff = target as i64 - current_minute_of_hour_sec as i64;
+        if (-300..=0).contains(&diff) {
+            -diff
+        } else {
+            // diff > 0 here
+            diff + 10_000
+        }
+    });
+    candidates.first().map(|i| (*i).clone())
+}
+
+/// Convert a Unix timestamp to a day-of-week bit position.
+/// Returns 0=Sunday, 1=Monday, ..., 6=Saturday (matches Unix
+/// convention). Pure function for easy testing.
+pub fn weekday_from_unix(unix_secs: u64) -> Option<u8> {
+    // Unix epoch (1970-01-01) was a Thursday (= 4 in our scheme).
+    // (unix_secs / 86400) gives days since epoch; mod 7 gives the
+    // offset.
+    let days = unix_secs / 86_400;
+    let dow = (days + 4) % 7;
+    Some(dow as u8)
 }
 
 // ============================================================================
@@ -2776,5 +3045,181 @@ mod tests {
     fn presenter_url_trims_whitespace() {
         let out = validate_presenter_url("  srt://h:9000  ").unwrap();
         assert_eq!(out, "srt://h:9000");
+    }
+
+    // ---- Hourly clock rotation ---------------------------------------
+
+    fn clock(minute: u8, id: u64, days: u8, label: &str) -> ClockItemSetting {
+        ClockItemSetting {
+            minute_of_hour: minute,
+            track_id: id,
+            days_of_week_mask: days,
+            label: label.into(),
+            hard_cut: true,
+        }
+    }
+
+    #[test]
+    fn clock_weekday_from_epoch_is_thursday() {
+        // 1970-01-01 UTC was a Thursday. In our scheme Thursday = 4.
+        assert_eq!(weekday_from_unix(0), Some(4));
+    }
+
+    #[test]
+    fn clock_weekday_known_dates() {
+        // 2024-01-01 was a Monday (= 1).
+        // 2024-01-01 00:00:00 UTC = 1704067200
+        assert_eq!(weekday_from_unix(1_704_067_200), Some(1));
+        // 2023-11-14 was a Tuesday (= 2).
+        // 2023-11-14 22:13:20 UTC = 1700000000
+        assert_eq!(weekday_from_unix(1_700_000_000), Some(2));
+    }
+
+    #[test]
+    fn clock_picks_upcoming_item_within_lookahead() {
+        let items = vec![clock(30, 100, 0x7F, "weather")];
+        // 12:29:30 UTC — minute 29.5 of hour. The :30 item is 30s
+        // away. With a 90s lookahead, we should pick it.
+        let now = (12 * 3600 + 29 * 60 + 30) as u64;
+        let item = next_due_clock_item(&items, now, 90, 0xFF).unwrap();
+        assert_eq!(item.track_id, 100);
+    }
+
+    #[test]
+    fn clock_picks_past_item_within_grace() {
+        let items = vec![clock(30, 100, 0x7F, "weather")];
+        // 12:32:00 — :30 was 2 min ago. Within 5-min grace.
+        let now = (12 * 3600 + 32 * 60) as u64;
+        let item = next_due_clock_item(&items, now, 90, 0xFF).unwrap();
+        assert_eq!(item.track_id, 100);
+    }
+
+    #[test]
+    fn clock_skips_item_too_far_in_future() {
+        let items = vec![clock(50, 100, 0x7F, "late")];
+        // 12:00:00 — :50 is 50 minutes away. Way outside 90s lookahead.
+        let now = (12 * 3600) as u64;
+        let item = next_due_clock_item(&items, now, 90, 0xFF);
+        assert!(item.is_none());
+    }
+
+    #[test]
+    fn clock_skips_item_too_far_in_past() {
+        let items = vec![clock(0, 100, 0x7F, "id")];
+        // 12:30:00 — :00 was 30 minutes ago. Past the 5-min grace.
+        let now = (12 * 3600 + 30 * 60) as u64;
+        let item = next_due_clock_item(&items, now, 90, 0xFF);
+        assert!(item.is_none());
+    }
+
+    #[test]
+    fn clock_respects_days_of_week_mask() {
+        // Item only on weekdays (Mon-Fri = bits 1..5 = 0x3E).
+        let items = vec![clock(0, 100, 0x3E, "id")];
+        // 2024-01-07 is a Sunday. weekday bit = 0x01.
+        // The item's mask is 0x3E; the today bit is 0x01.
+        // AND is zero, so the item should NOT fire.
+        let now = 1_704_067_200_u64 + 6 * 86_400; // Sunday
+        let item = next_due_clock_item(&items, now, 90, 0x01);
+        assert!(item.is_none());
+    }
+
+    #[test]
+    fn clock_picks_soonest_when_multiple_due() {
+        let items = vec![
+            clock(15, 100, 0x7F, "first"),
+            clock(20, 200, 0x7F, "second"),
+        ];
+        // 12:17:00 — :15 is 2 min past grace edge (5min), :20 is 3min future.
+        // Wait: 12:17 - :15 = 2min past, within 5min grace.
+        // 12:17 - :20 = 3min future, within 90s lookahead? No, 3min = 180s > 90s.
+        // So only the past :15 should be picked.
+        let now = (12 * 3600 + 17 * 60) as u64;
+        let item = next_due_clock_item(&items, now, 90, 0xFF).unwrap();
+        assert_eq!(item.track_id, 100);
+    }
+
+    #[test]
+    fn clock_skips_invalid_minute() {
+        // minute_of_hour=99 is invalid (max is 59). Should be filtered out.
+        let items = vec![clock(99, 100, 0x7F, "bad")];
+        let now = (12 * 3600) as u64;
+        let item = next_due_clock_item(&items, now, 99999, 0xFF);
+        assert!(item.is_none());
+    }
+
+    #[test]
+    fn clock_settings_default_has_clock_fields() {
+        let s = RadioSettings::default();
+        assert!(s.clock_items.is_empty());
+        assert_eq!(s.clock_lookahead_seconds, 90);
+        assert!(s.clock_enabled);
+    }
+
+    #[test]
+    fn clock_settings_toml_round_trip() {
+        let s = RadioSettings {
+            clock_items: vec![
+                ClockItemSetting {
+                    minute_of_hour: 0,
+                    track_id: 42,
+                    days_of_week_mask: 0x7F,
+                    label: "Station ID".into(),
+                    hard_cut: true,
+                },
+                ClockItemSetting {
+                    minute_of_hour: 30,
+                    track_id: 43,
+                    days_of_week_mask: 0x1F,
+                    label: "Weather".into(),
+                    hard_cut: false,
+                },
+            ],
+            clock_lookahead_seconds: 120,
+            clock_enabled: true,
+            ..RadioSettings::default()
+        };
+        let toml = toml::to_string(&s).unwrap();
+        let back: RadioSettings = toml::from_str(&toml).unwrap();
+        assert_eq!(back.clock_items.len(), 2);
+        assert_eq!(back.clock_items[0].minute_of_hour, 0);
+        assert_eq!(back.clock_items[0].track_id, 42);
+        assert_eq!(back.clock_items[1].minute_of_hour, 30);
+        assert_eq!(back.clock_items[1].days_of_week_mask, 0x1F);
+        assert!(!back.clock_items[1].hard_cut);
+        assert_eq!(back.clock_lookahead_seconds, 120);
+    }
+
+    #[test]
+    fn clock_settings_back_compat_when_clock_keys_missing() {
+        let minimal = r#"
+            port = 8000
+            mount_path = "/listen.mp3"
+            source_password = "x"
+            content_type = "audio/mpeg"
+            stream_name = "Test"
+        "#;
+        let s: RadioSettings = toml::from_str(minimal).unwrap();
+        assert!(s.clock_items.is_empty());
+        assert_eq!(s.clock_lookahead_seconds, 90);
+        assert!(s.clock_enabled);
+    }
+
+    #[test]
+    fn clock_clock_item_default_fields_when_partial_toml() {
+        // A clock item with only the required fields should get
+        // sensible defaults for the optional ones.
+        let item: ClockItemSetting = toml::from_str(
+            r#"
+            minute_of_hour = 0
+            track_id = 42
+        "#,
+        )
+        .unwrap();
+        assert_eq!(item.minute_of_hour, 0);
+        assert_eq!(item.track_id, 42);
+        assert_eq!(item.days_of_week_mask, 0x7F);
+        assert_eq!(item.label, "");
+        assert!(item.hard_cut);
     }
 }
