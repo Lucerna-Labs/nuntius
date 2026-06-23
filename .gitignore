@@ -25,3 +25,15 @@ cargo-clippy.log
 .idea/
 .vscode/
 *.swp
+/node_modules/
+/dist/
+/build/
+/.next/
+/out/
+/__pycache__/
+/.pytest_cache/
+/.mypy_cache/
+/.venv/
+/venv/
+/env/
+*.zip

@@ -423,6 +423,7 @@ dependencies = [
  "ccc-plugin-bridge",
  "ccc-plugin-call-studio",
  "ccc-plugin-drop",
+ "ccc-plugin-live-chat",
  "ccc-plugin-newsletter",
  "ccc-plugin-podcast",
  "ccc-plugin-s3",
@@ -581,6 +582,25 @@ dependencies = [
  "ccc-database",
  "serde",
  "tokio",
+]
+
+[[package]]
+name = "ccc-plugin-live-chat"
+version = "0.1.0"
+dependencies = [
+ "askama",
+ "askama_axum",
+ "async-stream",
+ "axum",
+ "ccc-core",
+ "ccc-plugin-utils",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

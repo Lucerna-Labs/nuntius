@@ -1,21 +1,31 @@
-Initializing CMS (admin store: admin.toml, state: ready)
+Initializing CMS (admin store: admin.toml, state: first-run setup pending)
 Initializing Blog Plugin (DB-backed posts + markdown).
 Initializing Podcast Plugin (audio dir: ./media/podcast)
 Initializing Video Podcast Plugin (HLS: ./media/video-hls, source: ./media/video-source, ffmpeg: found)
 Initializing Radio Engine on TCP 8000 (mount /listen.mp3)
-Initializing Federation: handle=@station@ccc.example.com (RSA keypair ready)
+[federation] generating RSA-2048 keypair (one-time)...
 [radio-engine] listening on 0.0.0.0:8000
-Initializing Whisper: binary='whisper' (available: false)
-Initializing S3: bucket='' configured=false
+Initializing Federation: handle=@station@ccc.example.com (RSA keypair ready)
+[2m2026-06-22T15:00:41.074571Z[0m [33m WARN[0m Skipping plugin [3mplugin[0m[2m=[0mwhisper [3merror[0m[2m=[0mPlugin initialization error: settings TOML parse: TOML parse error at line 1, column 1
+  |
+1 | [whisper]
+  | ^
+missing field `binary`
+
+[2m2026-06-22T15:00:41.081105Z[0m [33m WARN[0m Skipping plugin [3mplugin[0m[2m=[0ms3 [3merror[0m[2m=[0mPlugin initialization error: settings TOML parse: TOML parse error at line 1, column 1
+  |
+1 | [s3]
+  | ^
+missing field `bucket`
+
 Initializing Newsletter: host='' configured=false
-Initializing SEO: site=https://example.com
+[2m2026-06-22T15:00:41.088439Z[0m [33m WARN[0m Skipping plugin [3mplugin[0m[2m=[0mseo [3merror[0m[2m=[0mPlugin initialization error: settings TOML parse: TOML parse error at line 1, column 1
+  |
+1 | [seo]
+  | ^
+missing field `site_name`
+
 Initializing Analytics: in-memory ring buffer (capacity 5000)
 Initializing Bridge: content-blind WebRTC rendezvous.
 Initializing Ads (creative store + /api/ads/next).
-Starting Nuntius (CCC) on 0.0.0.0:3000 with 13 plugin(s) enabled: ["Content", "Blog", "Podcast", "Video Podcast", "Radio Station", "Federation", "Transcripts", "Object Storage", "Newsletter", "SEO", "Analytics", "Bridge", "Ads"]
-CMS enabled at /admin (sidecar: admin.toml)
-Analytics middleware engaged
 Server running on 0.0.0.0:3000
-[radio-engine] AutoDJ paused
-[radio-engine] AutoDJ resumed
-[radio-engine] AutoDJ paused
