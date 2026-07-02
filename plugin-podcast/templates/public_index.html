@@ -4,76 +4,94 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Podcasts - Nuntius</title>
+  <meta name="description" content="On-demand audio from Nuntius. Listen here or subscribe with the RSS feed.">
+  <meta name="theme-color" content="#07090d">
   <meta property="og:title" content="Podcasts - Nuntius">
   <meta property="og:type" content="website">
   <meta property="og:description" content="On-demand audio from Nuntius. Listen here or subscribe with the RSS feed.">
   <meta name="twitter:card" content="summary">
   <link rel="alternate" type="application/rss+xml" title="Nuntius Podcast" href="/podcasts/feed.xml">
-  <link rel="stylesheet" href="/admin/static/admin.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/assets/public.css">
   <style>
-    body.cms { background:#0f1318; color:#e8edf2; }
-    .site { max-width:1080px; margin:0 auto; padding:34px 20px 70px; }
-    .top { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:28px; }
-    .nav { display:flex; gap:10px; flex-wrap:wrap; }
-    .nav a { color:#dce6ee; text-decoration:none; border:1px solid rgba(255,255,255,.12); padding:8px 12px; border-radius:6px; }
-    h1 { margin:0; font-size:34px; letter-spacing:0; }
-    .lede { color:#9aa7b5; max-width:680px; margin:10px 0 0; }
-    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; margin-top:18px; }
-    .card { background:#151b22; border:1px solid #25313d; border-radius:8px; padding:16px; }
-    .card h3 { margin:0 0 8px; font-size:19px; }
-    .card p { color:#aab6c2; margin:8px 0 0; }
-    .meta { color:#7f8d9c; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
-    .card audio { width:100%; margin-top:14px; }
-    .section { margin-top:34px; }
-    .empty { color:#9aa7b5; border:1px dashed #34414f; border-radius:8px; padding:18px; }
+    /* --- Podcast index ------------------------------------------------------ */
+    .page-head { padding: 40px 0 4px; max-width: 680px; }
+    .page-head h1 { font-size: clamp(30px, 4.6vw, 44px); margin: 12px 0 0; }
+    .page-head .lede { color: var(--ink-dim); margin: 14px 0 0; }
+    .grid-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 14px;
+    }
+    .grid-cards .pub-card h3 { margin: 10px 0 6px; font-size: 17px; line-height: 1.3; }
+    .grid-cards .pub-card h3 a { color: var(--ink); }
+    .grid-cards .pub-card h3 a:hover { color: var(--signal-hot); }
+    .grid-cards .pub-card p { color: var(--ink-dim); margin: 0; font-size: 13.5px; }
+    .grid-cards .pub-card audio { width: 100%; margin-top: 14px; }
   </style>
 </head>
-<body class="cms">
-  <main class="site">
-    <div class="top">
-      <div>
+<body class="nuntius-public">
+  <div class="pub-wrap">
+    <header class="pub-top">
+      <a class="pub-brand" href="/">Nuntius</a>
+      <nav class="pub-nav" aria-label="Site">
+        <a href="/radio">Live radio</a>
+        <a href="/podcasts" aria-current="page">Podcasts</a>
+        <a href="/videos">Video</a>
+        <a href="/blog/">Blog</a>
+      </nav>
+    </header>
+
+    <main>
+      <div class="page-head">
+        <span class="pub-kicker">On demand</span>
         <h1>Podcasts</h1>
         <p class="lede">On-demand audio from Nuntius. Listen here or subscribe with the RSS feed.</p>
       </div>
-      <nav class="nav">
-        <a href="/">Station</a>
-        <a href="/radio">Live radio</a>
-        <a href="/videos">Video</a>
-        <a href="/podcasts/feed.xml">RSS</a>
-      </nav>
-    </div>
 
-    <section class="section">
-      <div class="grid">
-        {% for ep in episodes %}
-          <article class="card">
-            <div class="meta">{{ ep.published_human }}{% if ep.duration != "00:00" %} / {{ ep.duration }}{% endif %}</div>
-            <h3><a href="/podcasts/{{ ep.slug }}">{{ ep.title }}</a></h3>
-            <p>{{ ep.description }}</p>
-            <audio controls preload="metadata" src="/podcasts/download/{{ ep.id }}"></audio>
-          </article>
-        {% endfor %}
-      </div>
-      {% if episodes.is_empty() %}
-        <div class="empty">No public podcast episodes have been published yet.</div>
-      {% endif %}
-    </section>
+      <section class="pub-section" aria-label="Published episodes">
+        <div class="pub-section-head">
+          <h2>Episodes</h2>
+          <a href="/podcasts/feed.xml">RSS feed →</a>
+        </div>
+        <div class="grid-cards">
+          {% for ep in episodes %}
+            <article class="pub-card">
+              <div class="pub-kicker">{{ ep.published_human }}{% if ep.duration != "00:00" %} · {{ ep.duration }}{% endif %}</div>
+              <h3><a href="/podcasts/{{ ep.slug }}">{{ ep.title }}</a></h3>
+              <p>{{ ep.description }}</p>
+              <audio controls preload="metadata" src="/podcasts/download/{{ ep.id }}"></audio>
+            </article>
+          {% endfor %}
+        </div>
+        {% if episodes.is_empty() %}
+          <div class="pub-empty">No public podcast episodes have been published yet.</div>
+        {% endif %}
+      </section>
 
-    <section class="section">
-      <h2>Upcoming</h2>
-      <div class="grid">
-        {% for ep in upcoming %}
-          <article class="card">
-            <div class="meta">Coming soon</div>
-            <h3>{{ ep.title }}</h3>
-            <p>{{ ep.description }}</p>
-          </article>
-        {% endfor %}
-      </div>
-      {% if upcoming.is_empty() %}
-        <div class="empty">No upcoming podcast previews yet.</div>
-      {% endif %}
-    </section>
-  </main>
+      <section class="pub-section" aria-label="Upcoming episodes">
+        <div class="pub-section-head"><h2>Upcoming</h2></div>
+        <div class="grid-cards">
+          {% for ep in upcoming %}
+            <article class="pub-card">
+              <div class="pub-kicker">Coming soon</div>
+              <h3>{{ ep.title }}</h3>
+              <p>{{ ep.description }}</p>
+            </article>
+          {% endfor %}
+        </div>
+        {% if upcoming.is_empty() %}
+          <div class="pub-empty">No upcoming podcast previews yet.</div>
+        {% endif %}
+      </section>
+    </main>
+
+    <footer class="pub-footer">
+      <span>Powered by Nuntius</span>
+      <span><a href="/podcasts/feed.xml">Podcast RSS</a></span>
+    </footer>
+  </div>
 </body>
 </html>

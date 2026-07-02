@@ -1,28 +1,86 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title }} â€” Blog</title>
+  <title>{{ title }} — Blog</title>
+  <meta name="description" content="{{ meta_description }}">
+  <meta name="theme-color" content="#07090d">
   <meta property="og:title" content="{{ title }}">
   <meta property="og:type" content="article">
   <meta property="og:description" content="{{ meta_description }}">
   <meta name="twitter:card" content="summary">
-  <link rel="stylesheet" href="/admin/static/admin.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/assets/public.css">
   <style>
-    .blog-post { max-width: 720px; margin: 60px auto; padding: 0 24px; line-height: 1.65; }
-    .blog-post .meta { color: var(--text-dim); font-size: 13px; }
-    .blog-post img { max-width: 100%; }
-    .blog-post pre { background: var(--surface); padding: 12px; border-radius: 8px; overflow-x: auto; }
-    .blog-post code { background: var(--surface); padding: 1px 4px; border-radius: 3px; }
+    /* --- Blog post --------------------------------------------------------- */
+    .post { max-width: 760px; margin: 34px auto 0; }
+    .post-head h1 { font-size: clamp(28px, 4.2vw, 42px); line-height: 1.15; margin: 12px 0 0; }
+    .post-head .when {
+      font: 500 12px/1 var(--font-mono);
+      letter-spacing: 0.06em;
+      color: var(--ink-faint);
+      display: block;
+      margin-top: 14px;
+    }
+    .post-body { margin-top: 28px; line-height: 1.7; font-size: 16.5px; }
+    .post-body h1, .post-body h2, .post-body h3 { margin-top: 1.6em; }
+    .post-body img { max-width: 100%; border-radius: var(--radius); }
+    .post-body a { text-decoration: underline; text-underline-offset: 3px; }
+    .post-body pre {
+      background: var(--bg-panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      overflow-x: auto;
+      font: 400 13.5px/1.55 var(--font-mono);
+    }
+    .post-body code {
+      font-family: var(--font-mono);
+      font-size: 0.92em;
+      background: var(--bg-raise);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    .post-body pre code { background: none; padding: 0; font-size: inherit; }
+    .post-body blockquote {
+      border-left: 3px solid var(--signal);
+      margin: 1.2em 0;
+      padding: 2px 0 2px 16px;
+      color: var(--ink-dim);
+    }
+    .post-body table { border-collapse: collapse; }
+    .post-body th, .post-body td { border: 1px solid var(--line-bright); padding: 6px 10px; }
+    .post-body hr { border: none; border-top: 1px solid var(--line); margin: 2em 0; }
   </style>
 </head>
-<body class="cms">
-  <main class="blog-post">
-    <p><a href="/blog/">â† All posts</a></p>
-    <h1>{{ title }}</h1>
-    <p class="meta">{{ published_human }}</p>
-    <article>{{ rendered_html|safe }}</article>
-  </main>
+<body class="nuntius-public">
+  <div class="pub-wrap">
+    <header class="pub-top">
+      <a class="pub-brand" href="/">Nuntius</a>
+      <nav class="pub-nav" aria-label="Site">
+        <a href="/radio">Live radio</a>
+        <a href="/podcasts">Podcasts</a>
+        <a href="/videos">Video</a>
+        <a href="/blog/" aria-current="page">Blog</a>
+      </nav>
+    </header>
+
+    <main class="post">
+      <header class="post-head">
+        <p style="margin: 0;"><a href="/blog/">← All posts</a></p>
+        <h1>{{ title }}</h1>
+        <span class="when">{{ published_human }}</span>
+      </header>
+      <article class="post-body">{{ rendered_html|safe }}</article>
+    </main>
+
+    <footer class="pub-footer">
+      <span>Powered by Nuntius</span>
+      <span><a href="/podcasts/feed.xml">Podcast RSS</a></span>
+    </footer>
+  </div>
 </body>
 </html>

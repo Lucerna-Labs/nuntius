@@ -4,34 +4,94 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Subscribe — Nuntius</title>
-  <link rel="stylesheet" href="/admin/static/admin.css">
+  <meta name="description" content="Subscribe to the Nuntius newsletter.">
+  <meta name="theme-color" content="#07090d">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/assets/public.css">
   <style>
-    .nl-public { max-width: 520px; margin: 80px auto; padding: 24px; }
+    /* --- Subscribe page ---------------------------------------------------- */
+    .nl-wrap { max-width: 520px; margin: 48px auto 0; }
+    .nl-wrap h1 { font-size: clamp(28px, 4.2vw, 40px); margin: 12px 0 0; }
+    .nl-alert {
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+    .nl-alert.ok {
+      color: var(--phosphor);
+      border: 1px solid rgba(61, 219, 196, 0.35);
+      background: rgba(61, 219, 196, 0.07);
+    }
+    .nl-alert.err {
+      color: var(--live);
+      border: 1px solid rgba(255, 82, 82, 0.4);
+      background: rgba(255, 82, 82, 0.08);
+    }
+    .nl-form { margin-top: 24px; }
+    .nl-form label {
+      display: block;
+      font: 500 11px/1 var(--font-mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin-bottom: 8px;
+    }
+    .nl-form input[type="email"] {
+      width: 100%;
+      background: var(--bg-panel);
+      border: 1px solid var(--line-bright);
+      border-radius: var(--radius);
+      color: var(--ink);
+      font: 400 15px/1 var(--font-body);
+      padding: 13px 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .nl-form input[type="email"]:focus { border-color: var(--phosphor); }
+    .nl-form button { margin-top: 16px; }
   </style>
 </head>
-<body class="cms">
-  <main class="nl-public">
-    <h1>Subscribe</h1>
-    {% match success %}
-      {% when Some with (_) %}
-        <div class="cms-alert" style="background: rgba(91, 158, 255, 0.12); color: var(--accent); padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;">
-          You're on the list.
-        </div>
-      {% when None %}
-    {% endmatch %}
-    {% match error %}
-      {% when Some with (msg) %}
-        <div class="cms-alert cms-alert--error">{{ msg }}</div>
-      {% when None %}
-    {% endmatch %}
+<body class="nuntius-public">
+  <div class="pub-wrap">
+    <header class="pub-top">
+      <a class="pub-brand" href="/">Nuntius</a>
+      <nav class="pub-nav" aria-label="Site">
+        <a href="/radio">Live radio</a>
+        <a href="/podcasts">Podcasts</a>
+        <a href="/videos">Video</a>
+        <a href="/blog/">Blog</a>
+      </nav>
+    </header>
 
-    <form method="post" action="/newsletter/subscribe" class="cms-form">
-      <label class="cms-field">
-        <span class="cms-field__label">Your email</span>
-        <input class="cms-field__input" type="email" name="email" required autocomplete="email">
-      </label>
-      <button class="cms-btn cms-btn--primary" type="submit">Subscribe</button>
-    </form>
-  </main>
+    <main class="nl-wrap">
+      <span class="pub-kicker">Newsletter</span>
+      <h1>Subscribe</h1>
+
+      {% match success %}
+        {% when Some with (_) %}
+          <div class="nl-alert ok" role="status">You're on the list.</div>
+        {% when None %}
+      {% endmatch %}
+      {% match error %}
+        {% when Some with (msg) %}
+          <div class="nl-alert err" role="alert">{{ msg }}</div>
+        {% when None %}
+      {% endmatch %}
+
+      <form method="post" action="/newsletter/subscribe" class="nl-form">
+        <label for="nl-email">Your email</label>
+        <input id="nl-email" type="email" name="email" required autocomplete="email">
+        <button class="pub-btn primary" type="submit">Subscribe</button>
+      </form>
+    </main>
+
+    <footer class="pub-footer">
+      <span>Powered by Nuntius</span>
+      <span><a href="/podcasts/feed.xml">Podcast RSS</a></span>
+    </footer>
+  </div>
 </body>
 </html>

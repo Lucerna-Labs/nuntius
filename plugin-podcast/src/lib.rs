@@ -20,7 +20,7 @@ use axum::body::Body;
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{header, StatusCode},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Router,
 };
@@ -30,8 +30,8 @@ use ccc_core::{
 };
 use ccc_database::{CccDB, EpisodeStatus, PodcastEpisode, TranscriptionJob, TranscriptionStatus};
 use ccc_plugin_utils::{
-    format_clock, format_unix, html_escape, human_bytes_fixed, render, rfc2822_utc,
-    sanitize_filename_ascii, unix_now,
+    format_clock, format_unix, human_bytes_fixed, render, rfc2822_utc, sanitize_filename_ascii,
+    unix_now,
 };
 use rss::{
     extension::itunes::{ITunesChannelExtensionBuilder, ITunesItemExtensionBuilder},
@@ -383,29 +383,29 @@ fn build_feed_response(title: &str, episodes: &[ccc_database::PodcastEpisode]) -
         .into_response()
 }
 
+#[derive(Template)]
+#[template(path = "public_show.html")]
+struct PublicShowPage {
+    id: u64,
+    title: String,
+    description: String,
+    duration: String,
+    published_human: String,
+}
+
 async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
     let ep = match state.db.get_podcast_episode_by_slug(&slug) {
         Ok(Some(e)) if e.status == EpisodeStatus::Published => e,
         Ok(_) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let body = format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="UTF-8"><title>{} — Podcast</title>
-<link rel="stylesheet" href="/admin/static/admin.css">
-<style>.episode {{ max-width: 720px; margin: 60px auto; padding: 0 24px; }}
-.episode audio {{ width: 100%; margin-top: 16px; }}</style></head>
-<body class="cms"><main class="episode">
-<p><a href="/podcasts/feed.xml">← RSS feed</a></p>
-<h1>{}</h1>
-<audio controls preload="metadata" src="/podcasts/download/{}"></audio>
-<p style="margin-top: 16px; white-space: pre-wrap;">{}</p>
-</main></body></html>"#,
-        html_escape(&ep.title),
-        html_escape(&ep.title),
-        ep.id,
-        html_escape(&ep.description),
-    );
-    Html(body).into_response()
+    render(PublicShowPage {
+        id: ep.id,
+        title: ep.title,
+        description: ep.description,
+        duration: format_clock(ep.duration_seconds),
+        published_human: format_unix(ep.published_at.unwrap_or(ep.updated_at)),
+    })
 }
 
 async fn public_download(
@@ -746,9 +746,9 @@ async fn admin_delete(State(state): State<AppState>, Path(id): Path<u64>) -> Res
 // ============================================================================
 // Helpers
 // ============================================================================
-// The generic ones (render, html_escape, human_bytes_fixed,
-// sanitize_filename_ascii, format_clock, rfc2822_utc) live in
-// ccc-plugin-utils; only podcast-specific formatting stays here.
+// The generic ones (render, human_bytes_fixed, sanitize_filename_ascii,
+// format_clock, rfc2822_utc) live in ccc-plugin-utils; only
+// podcast-specific formatting stays here.
 
 fn new_form_error(msg: &str) -> Response {
     render(AdminNewPage {

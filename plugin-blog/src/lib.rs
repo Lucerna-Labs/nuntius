@@ -176,7 +176,7 @@ async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) ->
     };
     render(PublicPost {
         title: post.title.clone(),
-        rendered_html: render_markdown(&post.content),
+        rendered_html: render_post_html(&post.content),
         published_human: format_unix(post.published_at.unwrap_or(post.updated_at)),
         meta_description: markdown_excerpt(&post.content, 160),
     })
@@ -411,6 +411,23 @@ fn render_markdown(input: &str) -> String {
     buf
 }
 
+/// Markdown -> HTML -> sanitized HTML. Markdown deliberately passes raw
+/// HTML through, and the template renders the result with the `safe`
+/// filter — so everything headed for the public page goes through
+/// ammonia first (strips scripts, event handlers, javascript: URLs;
+/// keeps ordinary formatting, links, and tables). On top of the
+/// default policy we allow `id`/`class` on `div` and `class` on `sup`,
+/// which pulldown-cmark's footnote output needs — the default policy
+/// strips the definition's `id` and turns footnote references into
+/// dead anchors.
+fn render_post_html(input: &str) -> String {
+    ammonia::Builder::default()
+        .add_tag_attributes("div", &["id", "class"])
+        .add_tag_attributes("sup", &["class"])
+        .clean(&render_markdown(input))
+        .to_string()
+}
+
 /// Plain-text excerpt of a markdown document for meta-description tags:
 /// walks the parser's text/code events (so headings markers, emphasis,
 /// and link URLs never leak through), collapses whitespace, and
@@ -465,5 +482,38 @@ mod tests {
     #[test]
     fn excerpt_of_empty_body_is_empty() {
         assert_eq!(markdown_excerpt("", 160), "");
+    }
+
+    #[test]
+    fn script_tags_are_stripped_from_rendered_posts() {
+        let html =
+            render_post_html("Intro paragraph.\n\n<script>alert('xss')</script>\n\n**bold** end");
+        assert!(!html.contains("<script"), "script tag survived: {html}");
+        assert!(!html.contains("alert("), "script body survived: {html}");
+        // Ordinary markdown formatting must keep working.
+        assert!(html.contains("<strong>bold</strong>"), "markdown lost: {html}");
+    }
+
+    #[test]
+    fn event_handlers_and_js_urls_are_stripped() {
+        let html = render_post_html(
+            "<img src=\"x\" onerror=\"alert(1)\">\n\n<a href=\"javascript:alert(2)\">click</a>",
+        );
+        assert!(!html.contains("onerror"), "onerror survived: {html}");
+        assert!(!html.contains("javascript:"), "javascript: URL survived: {html}");
+    }
+
+    #[test]
+    fn footnote_anchors_survive_sanitization() {
+        let html = render_post_html("A claim.[^1]\n\n[^1]: The footnote text.");
+        // The reference link and the definition's id must both survive,
+        // otherwise clicking the footnote number goes nowhere.
+        assert!(html.contains("href=\"#1\""), "footnote ref lost: {html}");
+        assert!(html.contains("id=\"1\""), "footnote definition id lost: {html}");
+        // The relaxed policy must not weaken script stripping.
+        let attack = render_post_html("<div id=\"x\" onclick=\"alert(1)\"><script>bad()</script></div>");
+        assert!(!attack.contains("onclick"), "onclick survived: {attack}");
+        assert!(!attack.contains("<script"), "script survived: {attack}");
+        assert!(attack.contains("id=\"x\""), "benign id should survive: {attack}");
     }
 }

@@ -18,15 +18,14 @@ use askama::Template;
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Router,
 };
 use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use ccc_database::{CccDB, VideoPodcast, VideoStatus};
 use ccc_plugin_utils::{
-    format_clock, format_unix, html_escape, human_bytes_fixed, render, sanitize_filename_ascii,
-    unix_now,
+    format_clock, format_unix, human_bytes_fixed, render, sanitize_filename_ascii, unix_now,
 };
 use serde::Deserialize;
 use std::any::Any;
@@ -429,39 +428,29 @@ fn public_video_row(v: VideoPodcast) -> PublicVideoRow {
     }
 }
 
+#[derive(Template)]
+#[template(path = "public_show.html")]
+struct PublicShowPage {
+    title: String,
+    description: String,
+    hls_dir: String,
+    duration: String,
+    published_human: String,
+}
+
 async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
     let v = match state.db.get_video_podcast_by_slug(&slug) {
         Ok(Some(x)) if x.status == VideoStatus::Published => x,
         Ok(_) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    // P2P Media Loader optional — when bundled it picks up via window.p2pml.
-    let html = format!(
-        r#"<!doctype html><html lang="en"><head>
-<meta charset="UTF-8"><title>{title} — Video</title>
-<link rel="stylesheet" href="/admin/static/admin.css">
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-<style>.video-page {{ max-width: 960px; margin: 60px auto; padding: 0 24px; }}
-.video-page video {{ width: 100%; max-width: 1080px; }}</style>
-</head><body class="cms"><main class="video-page">
-<h1>{title}</h1>
-<video id="video" controls></video>
-<p style="margin-top:16px;white-space:pre-wrap;">{description}</p>
-<script>
-  if (Hls.isSupported()) {{
-    var hls = new Hls();
-    hls.loadSource('/videos/hls/{hls_dir}/master.m3u8');
-    hls.attachMedia(document.getElementById('video'));
-  }} else {{
-    document.getElementById('video').src = '/videos/hls/{hls_dir}/master.m3u8';
-  }}
-</script>
-</main></body></html>"#,
-        title = html_escape(&v.title),
-        description = html_escape(&v.description),
-        hls_dir = html_escape(&v.hls_directory),
-    );
-    Html(html).into_response()
+    render(PublicShowPage {
+        title: v.title,
+        description: v.description,
+        hls_dir: v.hls_directory,
+        duration: format_clock(v.duration_seconds),
+        published_human: format_unix(v.published_at.unwrap_or(v.updated_at)),
+    })
 }
 
 // ============================================================================
@@ -727,9 +716,9 @@ async fn admin_retry(State(state): State<AppState>, Path(id): Path<u64>) -> Resp
 // ============================================================================
 // Helpers
 // ============================================================================
-// The generic ones (render, html_escape, human_bytes_fixed,
-// sanitize_filename_ascii, format_clock, unix_now, format_unix) live in
-// ccc-plugin-utils; only video-specific glue stays here.
+// The generic ones (render, human_bytes_fixed, sanitize_filename_ascii,
+// format_clock, unix_now, format_unix) live in ccc-plugin-utils; only
+// video-specific glue stays here.
 
 fn new_form_error(msg: &str) -> Response {
     render(AdminNewPage {
