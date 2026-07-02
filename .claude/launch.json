@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nuntius",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "ccc-cli", "--", "serve"],
+      "port": 3000
+    }
+  ]
+}

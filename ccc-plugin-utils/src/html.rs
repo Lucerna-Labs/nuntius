@@ -36,6 +36,31 @@ pub fn html_escape(s: &str) -> String {
     out
 }
 
+/// Escapes `&`, `<`, `>`, `"`, and `'` for XML contexts (sitemaps, RSS
+/// built by hand). Unlike [`html_escape`], the apostrophe becomes the
+/// XML predefined entity `&apos;` rather than the numeric `&#39;` —
+/// this preserves the exact output of the SEO plugin's sitemap helper
+/// it was moved from.
+pub fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let replacement = match ch {
+            '&' => Some("&amp;"),
+            '<' => Some("&lt;"),
+            '>' => Some("&gt;"),
+            '"' => Some("&quot;"),
+            '\'' => Some("&apos;"),
+            _ => None,
+        };
+        if let Some(r) = replacement {
+            out.push_str(r);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +76,16 @@ mod tests {
     #[test]
     fn leaves_plain_text_alone() {
         assert_eq!(html_escape("Hello, world!"), "Hello, world!");
+    }
+
+    #[test]
+    fn xml_escape_uses_apos() {
+        // The one behavioral difference from html_escape: XML gets the
+        // predefined &apos; entity, not the numeric reference.
+        assert_eq!(
+            xml_escape("<a href=\"x\">&'</a>"),
+            "&lt;a href=&quot;x&quot;&gt;&amp;&apos;&lt;/a&gt;"
+        );
+        assert_eq!(xml_escape("plain-slug"), "plain-slug");
     }
 }

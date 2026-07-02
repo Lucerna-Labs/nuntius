@@ -14,9 +14,12 @@ pub mod html;
 pub mod render;
 pub mod settings;
 
-pub use bytes::human_bytes;
-pub use filename::sanitize_filename;
-pub use format::{format_seconds, format_unix, is_leap, relative_time, unix_now, unix_to_ymdhm};
-pub use html::html_escape;
+pub use bytes::{human_bytes, human_bytes_fixed};
+pub use filename::{sanitize_filename, sanitize_filename_ascii};
+pub use format::{
+    format_clock, format_seconds, format_unix, format_unix_utc, is_leap, relative_time,
+    rfc2822_utc, unix_now, unix_to_ymdhm,
+};
+pub use html::{html_escape, xml_escape};
 pub use render::render;
 pub use settings::TomlSidecar;

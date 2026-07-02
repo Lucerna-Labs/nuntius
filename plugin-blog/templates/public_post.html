@@ -1,9 +1,13 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title }} — Blog</title>
+  <title>{{ title }} â€” Blog</title>
+  <meta property="og:title" content="{{ title }}">
+  <meta property="og:type" content="article">
+  <meta property="og:description" content="{{ meta_description }}">
+  <meta name="twitter:card" content="summary">
   <link rel="stylesheet" href="/admin/static/admin.css">
   <style>
     .blog-post { max-width: 720px; margin: 60px auto; padding: 0 24px; line-height: 1.65; }
@@ -15,7 +19,7 @@
 </head>
 <body class="cms">
   <main class="blog-post">
-    <p><a href="/blog/">← All posts</a></p>
+    <p><a href="/blog/">â† All posts</a></p>
     <h1>{{ title }}</h1>
     <p class="meta">{{ published_human }}</p>
     <article>{{ rendered_html|safe }}</article>

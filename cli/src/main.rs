@@ -124,6 +124,23 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
     let port = port_override.unwrap_or(cfg.server.port);
     let addr = format!("{}:{}", cfg.server.host, port);
 
+    // Reject typo'd plugin names before doing any real work (opening the
+    // database, binding the socket). A silently skipped plugin is a feature
+    // the operator asked for and didn't get.
+    let unknown = registry::unknown_plugin_names(&cfg.plugins.enabled);
+    if !unknown.is_empty() {
+        eprintln!(
+            "Unknown plugin name(s) in [plugins].enabled: {}",
+            unknown.join(", ")
+        );
+        eprintln!(
+            "Plugins known to this build: {}",
+            registry::known_plugins().join(", ")
+        );
+        eprintln!("Fix the names in ccc.toml (or run `ccc plugins` to list them) and retry.");
+        std::process::exit(1);
+    }
+
     let db = match CccDB::new(&cfg.database.path.to_string_lossy()) {
         Ok(db) => Arc::new(db),
         Err(e) => {
@@ -143,8 +160,17 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
 
     let mut manager = PluginManager::new();
     for name in &cfg.plugins.enabled {
+        // Every name was validated above, so a failure here is a plugin
+        // that *is* known but couldn't construct or init — real
+        // misconfiguration (bad credentials, unreadable paths). Booting
+        // without it would silently drop a feature the operator enabled,
+        // so abort startup instead.
         if let Err(e) = registry::register_by_name(&mut manager, name, &cfg, &ctx) {
-            warn!(plugin = %name, error = %e, "Skipping plugin");
+            eprintln!("Plugin '{name}' failed to start: {e}");
+            eprintln!(
+                "Fix its [plugin.{name}] section in ccc.toml or remove '{name}' from [plugins].enabled."
+            );
+            std::process::exit(1);
         }
     }
     // Freeze the manager so the CMS admin shell can hold a shared

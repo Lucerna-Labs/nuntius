@@ -116,6 +116,23 @@ pub fn known_plugins() -> &'static [&'static str] {
     ]
 }
 
+/// Pure validation for `[plugins].enabled`: returns every configured name
+/// this build does not recognize, in config order, deduplicated. An empty
+/// result means every name maps to a dispatch-table arm.
+///
+/// The CLI calls this before opening the database or binding the listener,
+/// so a typo'd plugin name fails startup loudly instead of silently
+/// dropping a feature the operator asked for.
+pub fn unknown_plugin_names(enabled: &[String]) -> Vec<String> {
+    let mut unknown: Vec<String> = Vec::new();
+    for name in enabled {
+        if !known_plugins().contains(&name.as_str()) && !unknown.contains(name) {
+            unknown.push(name.clone());
+        }
+    }
+    unknown
+}
+
 #[derive(Debug)]
 pub enum DispatchError {
     Unknown(String),
@@ -138,5 +155,44 @@ impl std::error::Error for DispatchError {}
 impl From<PluginError> for DispatchError {
     fn from(e: PluginError) -> Self {
         DispatchError::Plugin(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owned(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn empty_enabled_list_is_valid() {
+        assert!(unknown_plugin_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn every_known_plugin_passes_validation() {
+        let enabled = owned(known_plugins());
+        assert!(unknown_plugin_names(&enabled).is_empty());
+    }
+
+    #[test]
+    fn unknown_names_reported_in_config_order() {
+        let enabled = owned(&["cms", "blgo", "radio-engine", "poodcast"]);
+        assert_eq!(unknown_plugin_names(&enabled), owned(&["blgo", "poodcast"]));
+    }
+
+    #[test]
+    fn duplicate_unknown_names_reported_once() {
+        let enabled = owned(&["blgo", "blgo", "blgo"]);
+        assert_eq!(unknown_plugin_names(&enabled), owned(&["blgo"]));
+    }
+
+    #[test]
+    fn identifiers_are_case_sensitive() {
+        // Config identifiers are exact kebab-case strings; "CMS" is a typo.
+        let enabled = owned(&["CMS"]);
+        assert_eq!(unknown_plugin_names(&enabled), owned(&["CMS"]));
     }
 }

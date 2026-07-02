@@ -12,13 +12,13 @@
 use askama::Template;
 use axum::{
     extract::State,
-    http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::get,
     Form, Router,
 };
 use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use ccc_database::{CccDB, PostStatus};
+use ccc_plugin_utils::{render, unix_to_ymdhm, xml_escape};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
@@ -220,56 +220,11 @@ async fn robots(State(state): State<PublicState>) -> Response {
         .into_response()
 }
 
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
+// xml_escape and the date math live in ccc-plugin-utils; only the
+// sitemap-specific `<lastmod>` shape stays here.
 fn iso_date(secs: u64) -> String {
     let (y, mo, d, _, _) = unix_to_ymdhm(secs);
     format!("{:04}-{:02}-{:02}", y, mo, d)
-}
-
-fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
-    let minutes_total = secs / 60;
-    let hours_total = minutes_total / 60;
-    let days_since_epoch = (hours_total / 24) as u32;
-    let minute = (minutes_total % 60) as u32;
-    let hour = (hours_total % 24) as u32;
-    let mut year = 1970u32;
-    let mut days_remaining = days_since_epoch;
-    loop {
-        let in_year = if is_leap(year) { 366 } else { 365 };
-        if days_remaining < in_year {
-            break;
-        }
-        days_remaining -= in_year;
-        year += 1;
-    }
-    let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) {
-        months_leap
-    } else {
-        months_normal
-    };
-    let mut month = 1u32;
-    for &len in &months {
-        if days_remaining < len {
-            break;
-        }
-        days_remaining -= len;
-        month += 1;
-    }
-    let day = days_remaining + 1;
-    (year, month, day, hour, minute)
-}
-
-fn is_leap(y: u32) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 // ============================================================================
@@ -316,9 +271,3 @@ async fn admin_post(State(state): State<AdminState>, Form(form): Form<SettingsFo
     Redirect::to("/admin/seo?saved=1").into_response()
 }
 
-fn render<T: Template>(tmpl: T) -> Response {
-    match tmpl.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}

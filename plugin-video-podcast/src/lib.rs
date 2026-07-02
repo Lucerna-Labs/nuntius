@@ -24,12 +24,16 @@ use axum::{
 };
 use ccc_core::{AdminNavEntry, AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use ccc_database::{CccDB, VideoPodcast, VideoStatus};
+use ccc_plugin_utils::{
+    format_clock, format_unix, html_escape, human_bytes_fixed, render, sanitize_filename_ascii,
+    unix_now,
+};
 use serde::Deserialize;
 use std::any::Any;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tower_http::{
     cors::{Any as CorsAny, CorsLayer},
@@ -416,7 +420,7 @@ fn public_video_row(v: VideoPodcast) -> PublicVideoRow {
         title: v.title,
         slug: v.slug,
         description: v.description,
-        duration: format_seconds(v.duration_seconds),
+        duration: format_clock(v.duration_seconds),
         published_human: v
             .published_at
             .map(format_unix)
@@ -492,7 +496,7 @@ async fn admin_list(State(state): State<AppState>) -> Response {
             title: v.title,
             slug: v.slug,
             status_str: v.status.as_str(),
-            size_human: human_bytes(v.size_bytes),
+            size_human: human_bytes_fixed(v.size_bytes),
             updated_human: format_unix(v.updated_at),
         })
         .collect();
@@ -550,7 +554,7 @@ async fn admin_create(State(state): State<AppState>, mut multipart: Multipart) -
                     Ok(b) => b,
                     Err(e) => return new_form_error(&format!("Upload read error: {}", e)),
                 };
-                let safe = format!("{}-{}", now, sanitize_filename(&original));
+                let safe = format!("{}-{}", now, sanitize_filename_ascii(&original, "video.bin"));
                 let mut path = state.source_dir.as_ref().clone();
                 path.push(&safe);
                 let mut f = match tokio::fs::File::create(&path).await {
@@ -647,7 +651,7 @@ async fn admin_edit_form(State(state): State<AppState>, Path(id): Path<u64>) -> 
         status_str: v.status.as_str(),
         source_path: v.source_path,
         hls_directory: v.hls_directory,
-        size_human: human_bytes(v.size_bytes),
+        size_human: human_bytes_fixed(v.size_bytes),
         created_human: format_unix(v.created_at),
         updated_human: format_unix(v.updated_at),
         error: None,
@@ -723,117 +727,13 @@ async fn admin_retry(State(state): State<AppState>, Path(id): Path<u64>) -> Resp
 // ============================================================================
 // Helpers
 // ============================================================================
-
-fn render<T: Template>(tmpl: T) -> Response {
-    match tmpl.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
+// The generic ones (render, html_escape, human_bytes_fixed,
+// sanitize_filename_ascii, format_clock, unix_now, format_unix) live in
+// ccc-plugin-utils; only video-specific glue stays here.
 
 fn new_form_error(msg: &str) -> Response {
     render(AdminNewPage {
         error: Some(msg),
         max_mb: MAX_UPLOAD_BYTES / (1024 * 1024),
     })
-}
-
-fn sanitize_filename(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    if cleaned.is_empty() {
-        "video.bin".into()
-    } else {
-        cleaned
-    }
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-fn human_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn format_unix(ts: u64) -> String {
-    let (y, mo, d, h, mi) = unix_to_ymdhm(ts);
-    format!("{:04}-{:02}-{:02} {:02}:{:02}", y, mo, d, h, mi)
-}
-
-fn format_seconds(s: u64) -> String {
-    let h = s / 3600;
-    let m = (s % 3600) / 60;
-    let sec = s % 60;
-    if h > 0 {
-        format!("{:02}:{:02}:{:02}", h, m, sec)
-    } else {
-        format!("{:02}:{:02}", m, sec)
-    }
-}
-
-fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
-    let minutes_total = secs / 60;
-    let hours_total = minutes_total / 60;
-    let days_since_epoch = (hours_total / 24) as u32;
-    let minute = (minutes_total % 60) as u32;
-    let hour = (hours_total % 24) as u32;
-    let mut year = 1970u32;
-    let mut days_remaining = days_since_epoch;
-    loop {
-        let in_year = if is_leap(year) { 366 } else { 365 };
-        if days_remaining < in_year {
-            break;
-        }
-        days_remaining -= in_year;
-        year += 1;
-    }
-    let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) {
-        months_leap
-    } else {
-        months_normal
-    };
-    let mut month = 1u32;
-    for &len in &months {
-        if days_remaining < len {
-            break;
-        }
-        days_remaining -= len;
-        month += 1;
-    }
-    let day = days_remaining + 1;
-    (year, month, day, hour, minute)
-}
-
-fn is_leap(y: u32) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }

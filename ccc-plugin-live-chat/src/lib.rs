@@ -409,23 +409,57 @@ struct AdminState {
 // WebSocket handler
 // ============================================================================
 
+/// RAII registration of one live WebSocket connection.
+///
+/// The `live_connections` counter must be decremented on *every* exit
+/// path — clean close, send error, a panic inside `ws_loop`, and the
+/// upgrade never firing at all. That last one is the subtle case: axum
+/// only invokes the `on_upgrade` callback once the HTTP upgrade
+/// actually completes, so if the client vanishes mid-handshake the
+/// callback (and any decrement written inside it) is silently dropped.
+/// Tying the decrement to `Drop` covers all of these at once, because
+/// the guard is destroyed whether the closure runs, unwinds, or is
+/// discarded unexecuted.
+struct ConnectionGuard {
+    core: Arc<ChatCore>,
+}
+
+impl ConnectionGuard {
+    /// Atomically claim a connection slot. Returns `None` when the
+    /// room is already at `max`; the speculative bump is rolled back
+    /// by the guard's own `Drop`, so callers never touch the counter
+    /// directly.
+    fn try_register(core: Arc<ChatCore>, max: usize) -> Option<Self> {
+        let prev = core.live_connections.fetch_add(1, Ordering::SeqCst);
+        let guard = Self { core };
+        if prev >= max {
+            // Over capacity — dropping `guard` here undoes the bump.
+            return None;
+        }
+        Some(guard)
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.core.live_connections.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<WsState>) -> Response {
     if !state.settings.snapshot().enabled {
         return (StatusCode::SERVICE_UNAVAILABLE, "chat disabled").into_response();
     }
     let max = state.settings.snapshot().max_connections;
-    let prev = state.core.live_connections.fetch_add(1, Ordering::SeqCst);
-    if prev >= max {
-        // Roll back the bump — we're over capacity.
-        state.core.live_connections.fetch_sub(1, Ordering::SeqCst);
-        return (StatusCode::SERVICE_UNAVAILABLE, "chat is full").into_response();
-    }
+    let guard = match ConnectionGuard::try_register(state.core.clone(), max) {
+        Some(g) => g,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, "chat is full").into_response(),
+    };
     ws.on_upgrade(move |socket| async move {
-        let counter = state.core.clone();
+        // The guard rides along for the lifetime of the connection;
+        // its Drop decrements the counter no matter how we exit.
+        let _guard = guard;
         ws_loop(socket, state).await;
-        // Make sure the count is decremented even if ws_loop returns
-        // via an error path. fetch_sub is cheap and idempotent.
-        counter.live_connections.fetch_sub(1, Ordering::SeqCst);
     })
 }
 
@@ -1003,6 +1037,49 @@ mod tests {
         assert_eq!(core.live_connections.load(Ordering::SeqCst), 2);
         core.live_connections.fetch_sub(1, Ordering::SeqCst);
         assert_eq!(core.live_connections.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn connection_guard_decrements_on_drop() {
+        let core = Arc::new(ChatCore::new(8));
+        let g = ConnectionGuard::try_register(core.clone(), 10).expect("slot free");
+        assert_eq!(core.live_connections.load(Ordering::SeqCst), 1);
+        drop(g);
+        assert_eq!(core.live_connections.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn connection_guard_rejects_over_capacity_and_rolls_back() {
+        let core = Arc::new(ChatCore::new(8));
+        let g1 = ConnectionGuard::try_register(core.clone(), 1).expect("first slot");
+        // Second registration must fail AND leave the count untouched
+        // (the speculative bump is rolled back by the failed guard's
+        // Drop inside try_register).
+        assert!(ConnectionGuard::try_register(core.clone(), 1).is_none());
+        assert_eq!(core.live_connections.load(Ordering::SeqCst), 1);
+        drop(g1);
+        assert_eq!(core.live_connections.load(Ordering::SeqCst), 0);
+        // The slot is reusable once released.
+        let g2 = ConnectionGuard::try_register(core.clone(), 1).expect("slot free again");
+        drop(g2);
+        assert_eq!(core.live_connections.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn connection_guard_decrements_even_on_panic() {
+        // This is the regression the guard exists for: a panic between
+        // increment and decrement (e.g. inside ws_loop) must not leak
+        // a connection slot. Before the guard, the decrement lived
+        // after the `ws_loop(..).await` call and was skipped on unwind
+        // — and skipped entirely if the HTTP upgrade never fired.
+        let core = Arc::new(ChatCore::new(8));
+        let core2 = core.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = ConnectionGuard::try_register(core2, 10).expect("slot free");
+            panic!("simulated ws_loop panic");
+        }));
+        assert!(result.is_err());
+        assert_eq!(core.live_connections.load(Ordering::SeqCst), 0);
     }
 
     #[test]

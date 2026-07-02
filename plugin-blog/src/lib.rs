@@ -14,7 +14,7 @@ use askama::Template;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Router,
 };
@@ -22,7 +22,7 @@ use ccc_core::{
     AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError, PluginLifecycle, PluginStatus,
 };
 use ccc_database::{BlogPost, CccDB, PostStatus};
-use ccc_plugin_utils::{format_unix, relative_time, unix_now};
+use ccc_plugin_utils::{format_unix, relative_time, render, unix_now};
 use serde::Deserialize;
 use std::any::Any;
 use std::sync::Arc;
@@ -163,6 +163,9 @@ struct PublicPost {
     title: String,
     rendered_html: String,
     published_human: String,
+    /// Plain-text excerpt of the post body for the og:description /
+    /// twitter description meta tags.
+    meta_description: String,
 }
 
 async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
@@ -175,6 +178,7 @@ async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) ->
         title: post.title.clone(),
         rendered_html: render_markdown(&post.content),
         published_human: format_unix(post.published_at.unwrap_or(post.updated_at)),
+        meta_description: markdown_excerpt(&post.content, 160),
     })
 }
 
@@ -393,13 +397,7 @@ async fn admin_delete(State(state): State<AppState>, Path(id): Path<u64>) -> Res
 // ============================================================================
 // Helpers
 // ============================================================================
-
-fn render<T: Template>(tmpl: T) -> Response {
-    match tmpl.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
+// `render` lives in ccc-plugin-utils; markdown handling stays local.
 
 fn render_markdown(input: &str) -> String {
     use pulldown_cmark::{html, Options, Parser};
@@ -411,4 +409,61 @@ fn render_markdown(input: &str) -> String {
     let mut buf = String::with_capacity(input.len() + input.len() / 4);
     html::push_html(&mut buf, parser);
     buf
+}
+
+/// Plain-text excerpt of a markdown document for meta-description tags:
+/// walks the parser's text/code events (so headings markers, emphasis,
+/// and link URLs never leak through), collapses whitespace, and
+/// truncates to `max_chars` characters with an ellipsis.
+fn markdown_excerpt(input: &str, max_chars: usize) -> String {
+    use pulldown_cmark::{Event, Parser, TagEnd};
+    let mut out = String::new();
+    for ev in Parser::new(input) {
+        match ev {
+            // Inline text flows as-is (adjacent events already carry
+            // their own spacing); blocks and line breaks get a space so
+            // "# Heading\n\nBody" doesn't fuse into "HeadingBody".
+            Event::Text(t) | Event::Code(t) => out.push_str(&t),
+            Event::SoftBreak | Event::HardBreak => out.push(' '),
+            Event::End(TagEnd::Paragraph)
+            | Event::End(TagEnd::Heading(_))
+            | Event::End(TagEnd::Item) => out.push(' '),
+            _ => {}
+        }
+        // Stop parsing once we clearly have enough material.
+        if out.chars().count() > max_chars {
+            break;
+        }
+    }
+    let collapsed = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{}…", truncated.trim_end())
+    } else {
+        truncated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excerpt_strips_markdown_and_truncates() {
+        let md = "# Heading\n\nSome **bold** text with a [link](https://example.com/x) and `code`.";
+        assert_eq!(
+            markdown_excerpt(md, 160),
+            "Heading Some bold text with a link and code."
+        );
+        let long = "word ".repeat(100);
+        let excerpt = markdown_excerpt(&long, 20);
+        assert!(excerpt.ends_with('…'));
+        assert!(excerpt.chars().count() <= 21);
+    }
+
+    #[test]
+    fn excerpt_of_empty_body_is_empty() {
+        assert_eq!(markdown_excerpt("", 160), "");
+    }
 }

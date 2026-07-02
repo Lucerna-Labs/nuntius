@@ -5,9 +5,14 @@
 //! - Actor:     `GET /users/:username` returns ActivityStreams 2.0 actor JSON
 //!   with a real RSA-2048 publicKey PEM.
 //! - Outbox:    `GET /users/:username/outbox` — published blog posts as Notes
-//! - Inbox:     `POST /users/:username/inbox` — parses Follow / Undo Follow.
-//!   On Follow we fetch the remote actor, persist the follower in redb,
-//!   and asynchronously deliver a signed Accept back to their inbox.
+//! - Inbox:     `POST /users/:username/inbox` — parses Follow / Undo Follow /
+//!   Move / Delete. On Follow we fetch the remote actor, persist the follower
+//!   in redb, and asynchronously deliver a signed Accept back to their inbox.
+//!   Inbound POSTs are authenticated: the `Signature` header (draft-cavage
+//!   v10) is verified against the sender's published key, and the `Digest`
+//!   header is checked against the body when present. Unsigned or badly
+//!   signed requests get 401. Operators can disable this for interop
+//!   debugging with `verify_inbound_signatures = false` in federation.toml.
 //!
 //! Outbound delivery (cross-plugin):
 //! - On `Event::BlogPostPublished` and `Event::PodcastEpisodePublished`,
@@ -21,8 +26,7 @@
 //! `federation.toml` (PEM). Form-driven settings updates preserve key
 //! material so editing the bio doesn't rotate keys.
 //!
-//! NOT yet (follow-up): verifying HTTP signatures on incoming requests;
-//! handling Move / Delete activities; backfilling shared inbox routing.
+//! NOT yet (follow-up): backfilling shared inbox routing.
 
 mod sig;
 
@@ -80,6 +84,17 @@ pub struct FederationSettings {
     /// the wire. Used to sign outbound HTTP requests + activities.
     #[serde(default)]
     pub private_key_pem: String,
+    /// Verify HTTP signatures on inbound inbox POSTs (Follow / Undo /
+    /// Move / Delete). Default true. Operators can flip this off in
+    /// federation.toml to debug interop with servers that produce
+    /// broken signatures — but leaving it off means anyone can spoof
+    /// follows and deletes, so don't ship that way.
+    #[serde(default = "default_verify_inbound_signatures")]
+    pub verify_inbound_signatures: bool,
+}
+
+fn default_verify_inbound_signatures() -> bool {
+    true
 }
 
 impl Default for FederationSettings {
@@ -91,6 +106,7 @@ impl Default for FederationSettings {
             summary: "The official broadcast feed.".to_string(),
             public_key_pem: String::new(),
             private_key_pem: String::new(),
+            verify_inbound_signatures: default_verify_inbound_signatures(),
         }
     }
 }
@@ -249,6 +265,7 @@ impl Plugin for CccPluginActivitypubPlugin {
             badge: None,
             detail: serde_json::json!({
                 "configured": !snap.private_key_pem.is_empty() && !host_warning,
+                "verify_inbound_signatures": snap.verify_inbound_signatures,
                 "actor": {
                     "display_name": snap.display_name,
                     "username": snap.username,
@@ -463,13 +480,17 @@ async fn inbox(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    // Verify the HTTP signature if one is present. We require it for
-    // mutating activities (Follow / Undo / Move / Delete) — anonymous
-    // POSTs to the inbox are rejected.
-    let target_path = format!("/users/{}/inbox", snap.username);
-    if let Err(e) = verify_inbound(&headers, &body, "post", &target_path).await {
-        eprintln!("[federation] inbox signature rejected: {}", e);
-        return StatusCode::UNAUTHORIZED.into_response();
+    // Verify the HTTP signature before acting on the payload — an
+    // anonymous POST could otherwise spoof Follow / Undo / Move /
+    // Delete. Unsigned requests are rejected outright. The check can
+    // be disabled via `verify_inbound_signatures = false` in
+    // federation.toml for interop debugging.
+    if snap.verify_inbound_signatures {
+        let target_path = format!("/users/{}/inbox", snap.username);
+        if let Err(e) = verify_inbound(&headers, &body, "post", &target_path).await {
+            eprintln!("[federation] inbox signature rejected: {}", e);
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
     }
 
     let activity: serde_json::Value = match serde_json::from_slice(&body) {
@@ -560,17 +581,28 @@ async fn verify_inbound(
     let parsed = sig::parse_signature_header(sig_header)
         .ok_or_else(|| "could not parse Signature header".to_string())?;
 
-    // Sanity-check the digest matches the body, if it's claimed in headers.
-    if parsed.headers.iter().any(|h| h == "digest") {
-        let provided = headers
-            .get("digest")
-            .ok_or("digest claimed in signature but missing from request")?
+    // Check the Digest header against the body whenever it's present —
+    // the signature only covers header lines, so without this a valid
+    // signature could be replayed over a different payload. If the
+    // signature claims `digest` but the header is missing, fail early
+    // with a clearer message than build_signing_string would give.
+    if let Some(provided) = headers.get("digest") {
+        let provided = provided
             .to_str()
-            .map_err(|_| "Digest header not ASCII")?;
-        let computed = sig::body_digest(body);
-        if provided != computed {
-            return Err("digest header does not match body hash".to_string());
+            .map_err(|_| "Digest header not ASCII".to_string())?;
+        match sig::digest_check(provided, body) {
+            Some(true) => {}
+            Some(false) => {
+                return Err("digest header does not match body hash".to_string());
+            }
+            // Only unsupported algorithms in the header. Don't 401 a
+            // legitimate peer we simply can't check — when the peer
+            // signed the Digest line, the signature verification below
+            // still covers its raw bytes.
+            None => {}
         }
+    } else if parsed.headers.iter().any(|h| h.eq_ignore_ascii_case("digest")) {
+        return Err("digest claimed in signature but missing from request".to_string());
     }
 
     // Fetch the remote actor's public key.
@@ -960,5 +992,46 @@ fn render<T: Template>(tmpl: T) -> Response {
     match tmpl.render() {
         Ok(html) => Html(html).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_inbound_signatures_defaults_to_true() {
+        assert!(FederationSettings::default().verify_inbound_signatures);
+    }
+
+    #[test]
+    fn verify_inbound_signatures_back_compat_when_missing() {
+        // Older federation.toml files predate the toggle — they must
+        // deserialize with verification ON, not silently off.
+        let legacy = r#"
+            display_name = "Nuntius"
+            username = "station"
+            host = "radio.example.org"
+            summary = "The official broadcast feed."
+        "#;
+        let s: FederationSettings = toml::from_str(legacy).unwrap();
+        assert!(s.verify_inbound_signatures);
+    }
+
+    #[test]
+    fn verify_inbound_signatures_can_be_disabled() {
+        let toml_src = r#"
+            display_name = "Nuntius"
+            username = "station"
+            host = "radio.example.org"
+            summary = ""
+            verify_inbound_signatures = false
+        "#;
+        let s: FederationSettings = toml::from_str(toml_src).unwrap();
+        assert!(!s.verify_inbound_signatures);
     }
 }

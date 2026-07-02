@@ -44,6 +44,31 @@ pub fn sanitize_filename(name: &str) -> String {
     }
 }
 
+/// Stricter, ASCII-only sanitizer used for uploaded media filenames:
+/// keeps `[A-Za-z0-9.-_]`, maps every other character (including path
+/// separators and whitespace) to `-`, and returns `fallback` when the
+/// input is empty. Unlike [`sanitize_filename`] this never collapses
+/// runs or trims dots — it preserves the exact historical behavior of
+/// the podcast/video upload paths, where the result is always prefixed
+/// with a timestamp so leading dots are harmless.
+pub fn sanitize_filename_ascii(name: &str, fallback: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        fallback.into()
+    } else {
+        cleaned
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +96,22 @@ mod tests {
     #[test]
     fn collapses_whitespace_runs() {
         assert_eq!(sanitize_filename("foo  bar"), "foo_bar");
+    }
+
+    #[test]
+    fn ascii_variant_maps_everything_else_to_hyphen() {
+        // Byte-exact with the old plugin-podcast/plugin-video-podcast
+        // local helpers: separators, spaces, and unicode all become '-',
+        // dots/dashes/underscores survive, no trimming or collapsing.
+        assert_eq!(
+            sanitize_filename_ascii("ep 1/final?.mp3", "audio.bin"),
+            "ep-1-final-.mp3"
+        );
+        assert_eq!(
+            sanitize_filename_ascii("..weird__name..", "audio.bin"),
+            "..weird__name.."
+        );
+        assert_eq!(sanitize_filename_ascii("", "audio.bin"), "audio.bin");
+        assert_eq!(sanitize_filename_ascii("", "video.bin"), "video.bin");
     }
 }

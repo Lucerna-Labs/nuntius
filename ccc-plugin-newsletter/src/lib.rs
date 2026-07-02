@@ -15,7 +15,7 @@ use askama::Template;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Router,
 };
@@ -23,6 +23,7 @@ use ccc_core::{
     AdminNavEntry, AppContext, Event, EventBus, Plugin, PluginError, PluginLifecycle, PluginStatus,
 };
 use ccc_database::{CccDB, PostStatus, Subscriber};
+use ccc_plugin_utils::{format_unix_utc, render, unix_now};
 use lettre::message::{header::ContentType, Message};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::AsyncSmtpTransport;
@@ -31,7 +32,6 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 // ============================================================================
 // Settings
@@ -427,7 +427,7 @@ async fn admin_list(State(state): State<AdminState>) -> Response {
             id: s.id,
             email: s.email,
             active: s.active,
-            created_human: format_unix(s.created_at),
+            created_human: format_unix_utc(s.created_at),
         })
         .collect();
     render(AdminListPage {
@@ -573,7 +573,7 @@ fn load_rows(db: &CccDB) -> Vec<SubscriberRow> {
             id: s.id,
             email: s.email,
             active: s.active,
-            created_human: format_unix(s.created_at),
+            created_human: format_unix_utc(s.created_at),
         })
         .collect()
 }
@@ -654,62 +654,5 @@ async fn admin_settings_post(
 // ============================================================================
 // Helpers
 // ============================================================================
-
-fn render<T: Template>(tmpl: T) -> Response {
-    match tmpl.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn format_unix(ts: u64) -> String {
-    let (y, mo, d, h, mi) = unix_to_ymdhm(ts);
-    format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", y, mo, d, h, mi)
-}
-
-fn unix_to_ymdhm(secs: u64) -> (u32, u32, u32, u32, u32) {
-    let minutes_total = secs / 60;
-    let hours_total = minutes_total / 60;
-    let days_since_epoch = (hours_total / 24) as u32;
-    let minute = (minutes_total % 60) as u32;
-    let hour = (hours_total % 24) as u32;
-
-    let mut year = 1970u32;
-    let mut days_remaining = days_since_epoch;
-    loop {
-        let in_year = if is_leap(year) { 366 } else { 365 };
-        if days_remaining < in_year {
-            break;
-        }
-        days_remaining -= in_year;
-        year += 1;
-    }
-    let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let months = if is_leap(year) {
-        months_leap
-    } else {
-        months_normal
-    };
-    let mut month = 1u32;
-    for &len in &months {
-        if days_remaining < len {
-            break;
-        }
-        days_remaining -= len;
-        month += 1;
-    }
-    let day = days_remaining + 1;
-    (year, month, day, hour, minute)
-}
-
-fn is_leap(y: u32) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
-}
+// render / unix_now / format_unix_utc (the `YYYY-MM-DD HH:MM UTC` shape
+// the subscriber list has always shown) all live in ccc-plugin-utils.

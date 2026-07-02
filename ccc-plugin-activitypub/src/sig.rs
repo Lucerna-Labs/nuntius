@@ -20,6 +20,48 @@ pub fn body_digest(body: &[u8]) -> String {
     format!("SHA-256={}", b64)
 }
 
+/// Check a received `Digest:` header value against the actual body.
+///
+/// RFC 3230 allows a comma-separated list of `algorithm=value` pairs
+/// and peers are free to send algorithms we don't implement. Returns:
+/// - `Some(true)`  — at least one supported entry, and it matches
+/// - `Some(false)` — a supported entry is present but wrong (reject!)
+/// - `None`        — no supported algorithm in the header; the caller
+///   decides (we accept rather than 401 legitimate peers we simply
+///   can't check — the signature still covers the raw header line).
+///
+/// SHA-256 and SHA-512 are supported; tokens match case-insensitively
+/// because both `SHA-256=` and `sha-256=` show up in the wild.
+pub fn digest_check(provided: &str, body: &[u8]) -> Option<bool> {
+    let mut verdict: Option<bool> = None;
+    for entry in provided.split(',') {
+        // split_once takes the FIRST '=', so base64 padding at the end
+        // of the value survives intact.
+        let Some((algo, b64)) = entry.trim().split_once('=') else {
+            continue;
+        };
+        let algo = algo.trim();
+        let expected = if algo.eq_ignore_ascii_case("sha-256") {
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(body))
+        } else if algo.eq_ignore_ascii_case("sha-512") {
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(body))
+        } else {
+            continue;
+        };
+        if b64.trim() == expected {
+            return Some(true);
+        }
+        verdict = Some(false);
+    }
+    verdict
+}
+
+/// Strict form of [`digest_check`]: true only when a supported digest
+/// entry is present AND matches the body.
+pub fn digest_matches(provided: &str, body: &[u8]) -> bool {
+    digest_check(provided, body) == Some(true)
+}
+
 /// Sign an outbound POST. Returns the value to put in the `Signature:`
 /// header. `key_id` is the URL of the public key (e.g.
 /// `https://example.com/users/station#main-key`).
@@ -253,6 +295,232 @@ fn is_leap(y: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 2048-bit RSA fixture keypair, generated once with openssl and
+    // frozen here so the signature tests are deterministic and don't
+    // pay keygen cost on every run. Test-only — never use these keys
+    // for anything real.
+    const TEST_PRIVATE_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCxGFYt7wEoDcaI
+Z2FsFepf+EElsnEfY20xSFzE3nfu/sjzzPgY6bf6sU5wDfVCD9soSiRYT4TiUMAE
+ugoO6AIPC3XztbCxQRT4v0w8F3Y++teWVVQlEShbgwBA3r53KTRoyemc4bi+SibV
+/knIxUJv8vBc/KjR4jPby/Tkk/skVLQC9dEBKHpWJpCjs0GNAU3E6TFa41++dWAE
+cwU1wpoV59NJ0JqbbAc1oLtLtkVSl9N+WbjSypdqqvfR1FGZd+Ub/ig+T/2FsCYU
+7yeroj1dlxXxCUtiIHQHVr4a4ErQPJp1bDWWr7DGMwx2b9KWB5/rsYil54SX69hx
+9qalEkzZAgMBAAECggEAHfX3koLWZ7/Y4DfZQA9/HOhjoSyMvdo03XsYEshucvUQ
+60o4iQJ1eUio9AUwgpIrKihM+NHPMfimW8ZbsETpIEF4nZgWAg74LNM0YxA3FZWb
+hpf+Cd1avgyuLMtiXseOUdIjH0MC3dKuulJwijJxOH5Z0ul96DBERMG/NzKf8PfI
+5dre56p7sCYuGkqkYoAta0Enzld2z/dZU5z7xRcXZUhcxWe1OtWKw+XTfmU57+ba
+XFD0QTE6CtnyG6GSsPECbR4HKirjbpFAVAZ1a2PxwG3rwV3AczntoJR5TEI7+Q14
+quDG0zrUNrrn08ltPScav5UT47RswY9tCHv8SJRP5wKBgQDy/OozaaQ3ATqwjNYK
+Ip4K0IePtiRf49olwaIPpgrjpcGvOZGTSYLkgET+guDLx4Cali9/SIsNdaTYkJjE
+bX/QSXmi0E//KXdZYw6+pwzQIL+r28aeHaP3VNEZv4oglraMQ3bPndy0JPefXTU+
+/3PYKHRvPPwWkUDC6Qx71FbiBwKBgQC6lBsu4/eVr/bw1Fyp/eQK60Vha98Z6VtG
+kX8iYCVUDARt+he9S6K/C751DZ9ncEQc6FG9dL29AVeatdQGMVgcn55uouJeNyvW
+ZbvZl5VXtcQ2KSDg8PzL4ZBM6cK/WbAhU/JtO7uTaV2J94wsNH+gN+N9wotMo70v
+DOE8tTgiHwKBgQChyHla3+ShZuUftbWxK9lUVAFeUySm37tYVjND/gbUCYIK2+as
+TU6kOy800glARMXAp2xab/99Z63pL2U3q7xk/vbIy6/nsUEwt76SfAEQ9i0IDR2S
+GyQXwlYysZATIKXMgAK0O2Q+YTqp1dJk7orACjdz9QPXNsEKxUY1kGyEswKBgQCP
+h8Ahol2kWWmueq+OVjJH9BW7jDBkzo/ZCbSzzSLqNRRzRiFdDgJ01aP+iCxIdqTv
+WAkJpfUQoSezbI1e9jbCTkii88sQj4C5vil0ipfokXwP7jPM15ahgTRw9qNKcMR9
+3wZv4bO7AyNiL301xG0p49StuitPGec/erkK6p30IQKBgHdUKGgEyq7Nu56EkSjA
+/C2+KnHD5X5NsdiBEgam7lp3cfKJUnoXCruDrklBoksnK7HpfXvDlTgs6IbuC83j
+gWamBrmm3c1jr6uv6/eh9471k+62BbgUChIHcGUn9NEmgs4xQkPmewYW/vYdpYCu
+aOW+dslKjuIucaoXrhmMT784
+-----END PRIVATE KEY-----
+";
+
+    const TEST_PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsRhWLe8BKA3GiGdhbBXq
+X/hBJbJxH2NtMUhcxN537v7I88z4GOm3+rFOcA31Qg/bKEokWE+E4lDABLoKDugC
+Dwt187WwsUEU+L9MPBd2PvrXllVUJREoW4MAQN6+dyk0aMnpnOG4vkom1f5JyMVC
+b/LwXPyo0eIz28v05JP7JFS0AvXRASh6ViaQo7NBjQFNxOkxWuNfvnVgBHMFNcKa
+FefTSdCam2wHNaC7S7ZFUpfTflm40sqXaqr30dRRmXflG/4oPk/9hbAmFO8nq6I9
+XZcV8QlLYiB0B1a+GuBK0DyadWw1lq+wxjMMdm/Slgef67GIpeeEl+vYcfampRJM
+2QIDAQAB
+-----END PUBLIC KEY-----
+";
+
+    // A *different* keypair's public key — verification against this
+    // must fail even for a perfectly well-formed signature.
+    const OTHER_PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsSoksXns1XeEanqaUJrr
+dhW6J7SZDAq4EV8DseSBfXkKhbxG95Hmzgmf+wEtJG5cFLhvGSrKGiO/llss3BZL
+/xss4FP7OA05htoId4zrWYAVxJRJGVIsXwOHkDDpnQI/O6XrYaQ3rprlYrEpC283
+PtDU2DoqXneZTxFYTH1V70fC+727IY5Qrzj0Eo9AT3POtbRco7rJiTPIxZuDsLCm
+aa+iBUybjvtWNsn5Z5Lp/De6+3rGVVUQNp5HKNQkEw4CbUKtWdypmgZDMMTSPY7q
+jpYMpWRypoEAYb8X7NrFa7KdhBoA732wVa6O2FHMhBLsjWigAEPAmWpOD7T788cQ
+xwIDAQAB
+-----END PUBLIC KEY-----
+";
+
+    const TEST_KEY_ID: &str = "https://station.example/users/station#main-key";
+
+    #[test]
+    fn parse_signature_header_full() {
+        let header = r#"keyId="https://a.example/u/x#main-key",algorithm="rsa-sha256",headers="(request-target) host date digest",signature="c2ln""#;
+        let parsed = parse_signature_header(header).expect("parses");
+        assert_eq!(parsed.key_id, "https://a.example/u/x#main-key");
+        assert_eq!(parsed.algorithm.as_deref(), Some("rsa-sha256"));
+        assert_eq!(
+            parsed.headers,
+            vec!["(request-target)", "host", "date", "digest"]
+        );
+        assert_eq!(parsed.signature_b64, "c2ln");
+    }
+
+    #[test]
+    fn parse_signature_header_defaults_headers_to_date() {
+        // Per draft-cavage, an absent `headers` field means just "date".
+        let header = r#"keyId="k",signature="s""#;
+        let parsed = parse_signature_header(header).expect("parses");
+        assert_eq!(parsed.headers, vec!["date"]);
+    }
+
+    #[test]
+    fn parse_signature_header_rejects_missing_required_fields() {
+        // No keyId.
+        assert!(parse_signature_header(r#"signature="s""#).is_none());
+        // No signature.
+        assert!(parse_signature_header(r#"keyId="k""#).is_none());
+        // Garbage.
+        assert!(parse_signature_header("not a signature header").is_none());
+    }
+
+    /// Full producer→consumer round trip: sign_post builds the header,
+    /// parse_signature_header + build_signing_string reconstruct the
+    /// signing string on the receiving side, and verify_rsa_sha256
+    /// accepts it with the matching public key.
+    #[test]
+    fn sign_then_verify_round_trip() {
+        let body: &[u8] = br#"{"type":"Follow","actor":"https://b.example/u/y"}"#;
+        let digest = body_digest(body);
+        let date = http_date(1_705_322_096);
+        let host = "station.example";
+        let path = "/users/station/inbox";
+
+        let header =
+            sign_post(TEST_PRIVATE_PEM, TEST_KEY_ID, path, host, &date, &digest).expect("signs");
+        let parsed = parse_signature_header(&header).expect("parses own header");
+        assert_eq!(parsed.key_id, TEST_KEY_ID);
+
+        // Reconstruct the signing string the way the inbox handler does,
+        // from an axum HeaderMap.
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("host", host.parse().unwrap());
+        headers.insert("date", date.parse().unwrap());
+        headers.insert("digest", digest.parse().unwrap());
+        let signing_string =
+            build_signing_string(&parsed.headers, "post", path, &headers).expect("builds");
+
+        verify_rsa_sha256(TEST_PUBLIC_PEM, &signing_string, &parsed.signature_b64)
+            .expect("valid signature verifies");
+    }
+
+    #[test]
+    fn verify_rejects_tampered_signing_string() {
+        let body: &[u8] = b"{}";
+        let digest = body_digest(body);
+        let date = http_date(1_705_322_096);
+        let header = sign_post(
+            TEST_PRIVATE_PEM,
+            TEST_KEY_ID,
+            "/users/station/inbox",
+            "station.example",
+            &date,
+            &digest,
+        )
+        .expect("signs");
+        let parsed = parse_signature_header(&header).expect("parses");
+
+        // Signature was made over the inbox path; verify against a
+        // different path — an attacker replaying the request elsewhere.
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("host", "station.example".parse().unwrap());
+        headers.insert("date", date.parse().unwrap());
+        headers.insert("digest", digest.parse().unwrap());
+        let signing_string =
+            build_signing_string(&parsed.headers, "post", "/users/other/inbox", &headers)
+                .expect("builds");
+        assert!(verify_rsa_sha256(TEST_PUBLIC_PEM, &signing_string, &parsed.signature_b64).is_err());
+    }
+
+    #[test]
+    fn verify_rejects_wrong_public_key() {
+        // Sign, then reconstruct the exact signing string sign_post
+        // used, so the ONLY difference between the two assertions
+        // below is which key we verify with.
+        let header = sign_post(TEST_PRIVATE_PEM, TEST_KEY_ID, "/x", "h", "d", "SHA-256=x")
+            .expect("signs");
+        let parsed = parse_signature_header(&header).expect("parses");
+        let signing_string = "(request-target): post /x\nhost: h\ndate: d\ndigest: SHA-256=x";
+        // Sanity: the matching key accepts it...
+        verify_rsa_sha256(TEST_PUBLIC_PEM, signing_string, &parsed.signature_b64)
+            .expect("own key verifies");
+        // ...and a different actor's key does not.
+        assert!(verify_rsa_sha256(OTHER_PUBLIC_PEM, signing_string, &parsed.signature_b64).is_err());
+    }
+
+    #[test]
+    fn verify_rejects_bad_base64_and_bad_pem() {
+        assert!(verify_rsa_sha256(TEST_PUBLIC_PEM, "x", "!!!not-base64!!!").is_err());
+        assert!(verify_rsa_sha256("not a pem", "x", "c2ln").is_err());
+    }
+
+    #[test]
+    fn body_digest_known_vector() {
+        // SHA-256 of the empty string, base64-encoded.
+        assert_eq!(
+            body_digest(b""),
+            "SHA-256=47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+        );
+    }
+
+    #[test]
+    fn digest_matches_accepts_correct_and_case_insensitive_algo() {
+        let body = b"hello world";
+        let d = body_digest(body);
+        assert!(digest_matches(&d, body));
+        // Lowercase algorithm token (some servers send this).
+        let lower = d.replacen("SHA-256", "sha-256", 1);
+        assert!(digest_matches(&lower, body));
+    }
+
+    #[test]
+    fn digest_matches_rejects_wrong_body_algo_and_garbage() {
+        let d = body_digest(b"hello world");
+        assert!(!digest_matches(&d, b"tampered body"));
+        assert!(!digest_matches("MD5=abcd", b"hello world"));
+        assert!(!digest_matches("garbage-no-equals", b"hello world"));
+        assert!(!digest_matches("", b"hello world"));
+    }
+
+    #[test]
+    fn digest_check_tristate() {
+        let body = b"hello world";
+        let good = body_digest(body);
+        // Supported + correct.
+        assert_eq!(digest_check(&good, body), Some(true));
+        // Supported + wrong body: hard mismatch.
+        assert_eq!(digest_check(&good, b"tampered"), Some(false));
+        // Only unsupported algorithms: undecidable, caller's choice.
+        assert_eq!(digest_check("MD5=abcd", body), None);
+        assert_eq!(digest_check("unicorn-1=xyz", body), None);
+        assert_eq!(digest_check("", body), None);
+        // RFC 3230 list: unsupported entry + supported correct entry.
+        let list = format!("MD5=abcd,{}", good);
+        assert_eq!(digest_check(&list, body), Some(true));
+        // List where the only supported entry is wrong.
+        let wrong = body_digest(b"other").replacen("SHA-256=", "sha-256=", 1);
+        let list = format!("MD5=abcd,{}", wrong);
+        assert_eq!(digest_check(&list, body), Some(false));
+        // SHA-512 support.
+        let sha512 = format!(
+            "SHA-512={}",
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(body))
+        );
+        assert_eq!(digest_check(&sha512, body), Some(true));
+    }
 
     #[test]
     fn http_date_known_timestamps() {

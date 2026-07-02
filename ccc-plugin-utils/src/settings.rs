@@ -115,24 +115,43 @@ where
     }
 
     /// Read the current settings. Cheap: clones the inner value.
+    ///
+    /// A poisoned lock (a thread panicked while holding the guard) is
+    /// recovered via `into_inner()` rather than propagating the panic:
+    /// settings are plain data protected by short critical sections, so
+    /// the value is never left in a torn state worth crashing over.
     pub fn snapshot(&self) -> T {
-        self.inner.read().expect("settings lock poisoned").clone()
+        match self.inner.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     /// Replace the current settings and persist the change to disk.
+    /// Recovers from a poisoned lock the same way [`Self::snapshot`] does.
     pub fn replace(&self, new: T) -> Result<(), SettingsError> {
-        *self.inner.write().expect("settings lock poisoned") = new;
+        {
+            let mut guard = match self.inner.write() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *guard = new;
+        }
         self.persist()
     }
 
     /// Update the current settings in place via a closure and persist
     /// the result. Useful when only one field needs to change.
+    /// Recovers from a poisoned lock the same way [`Self::snapshot`] does.
     pub fn update<F>(&self, f: F) -> Result<(), SettingsError>
     where
         F: FnOnce(&mut T),
     {
         {
-            let mut guard = self.inner.write().expect("settings lock poisoned");
+            let mut guard = match self.inner.write() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             f(&mut guard);
         }
         self.persist()
@@ -210,6 +229,34 @@ mod tests {
         assert_eq!(store.snapshot().port, 1234);
         let reloaded = TomlSidecar::<Demo>::load_or_init(&path).unwrap();
         assert_eq!(reloaded.snapshot().port, 1234);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn survives_a_poisoned_lock() {
+        let path = tmp_path("poison");
+        let _ = std::fs::remove_file(&path);
+        let store = TomlSidecar::<Demo>::load_or_init(&path).unwrap();
+        store.update(|d| d.port = 4321).unwrap();
+        // Poison the lock: panic on another thread while holding the
+        // write guard. (The panic output in the test log is expected.)
+        let clone = store.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = clone.inner.write().unwrap();
+            panic!("deliberately poisoning the settings lock");
+        })
+        .join();
+        // Every accessor must keep working instead of panicking.
+        assert_eq!(store.snapshot().port, 4321);
+        store
+            .replace(Demo {
+                port: 1,
+                name: "after-poison".into(),
+            })
+            .unwrap();
+        store.update(|d| d.port = 2).unwrap();
+        assert_eq!(store.snapshot().port, 2);
+        assert_eq!(store.snapshot().name, "after-poison");
         let _ = std::fs::remove_file(&path);
     }
 }

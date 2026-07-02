@@ -29,7 +29,10 @@ use ccc_core::{
     ServiceRegistry,
 };
 use ccc_database::{CccDB, EpisodeStatus, PodcastEpisode, TranscriptionJob, TranscriptionStatus};
-use ccc_plugin_utils::{format_unix, unix_now, unix_to_ymdhm};
+use ccc_plugin_utils::{
+    format_clock, format_unix, html_escape, human_bytes_fixed, render, rfc2822_utc,
+    sanitize_filename_ascii, unix_now,
+};
 use rss::{
     extension::itunes::{ITunesChannelExtensionBuilder, ITunesItemExtensionBuilder},
     ChannelBuilder, EnclosureBuilder, GuidBuilder, ItemBuilder,
@@ -127,7 +130,7 @@ impl Plugin for PodcastPlugin {
                     "id": e.id,
                     "title": e.title,
                     "status": if e.published_at.is_some() { "published" } else { "producing" },
-                    "duration": format_seconds(e.duration_seconds),
+                    "duration": format_clock(e.duration_seconds),
                     "downloads": 0u64,
                 })
             })
@@ -265,7 +268,7 @@ fn public_episode_row(ep: PodcastEpisode) -> PublicEpisodeRow {
         title: ep.title,
         slug: ep.slug,
         description: ep.description,
-        duration: format_seconds(ep.duration_seconds),
+        duration: format_clock(ep.duration_seconds),
         published_human: ep
             .published_at
             .map(format_unix)
@@ -475,7 +478,7 @@ async fn admin_list(State(state): State<AppState>) -> Response {
             title: e.title,
             slug: e.slug,
             status_str: e.status.as_str(),
-            size_human: human_bytes(e.size_bytes),
+            size_human: human_bytes_fixed(e.size_bytes),
             updated_human: format_unix(e.updated_at),
         })
         .collect();
@@ -541,7 +544,7 @@ async fn admin_create(State(state): State<AppState>, mut multipart: Multipart) -
                     Ok(b) => b,
                     Err(e) => return new_form_error(&format!("Upload read error: {}", e)),
                 };
-                let safe_filename = format!("{}-{}", now, sanitize_filename(&original));
+                let safe_filename = format!("{}-{}", now, sanitize_filename_ascii(&original, "audio.bin"));
                 let mut full = state.audio_dir.as_ref().clone();
                 full.push(&safe_filename);
                 let mut file = match tokio::fs::File::create(&full).await {
@@ -663,7 +666,7 @@ async fn admin_edit_form(State(state): State<AppState>, Path(id): Path<u64>) -> 
         status_str: ep.status.as_str(),
         audio_path: ep.audio_path,
         mime_type: ep.mime_type,
-        size_human: human_bytes(ep.size_bytes),
+        size_human: human_bytes_fixed(ep.size_bytes),
         created_human: format_unix(ep.created_at),
         updated_human: format_unix(ep.updated_at),
         transcript_job_id: ep.transcript_job_id,
@@ -716,7 +719,7 @@ async fn admin_update(
             status_str: ep.status.as_str(),
             audio_path: ep.audio_path,
             mime_type: ep.mime_type,
-            size_human: human_bytes(ep.size_bytes),
+            size_human: human_bytes_fixed(ep.size_bytes),
             created_human: format_unix(ep.created_at),
             updated_human: format_unix(ep.updated_at),
             transcript_job_id: ep.transcript_job_id,
@@ -743,57 +746,15 @@ async fn admin_delete(State(state): State<AppState>, Path(id): Path<u64>) -> Res
 // ============================================================================
 // Helpers
 // ============================================================================
-
-fn render<T: Template>(tmpl: T) -> Response {
-    match tmpl.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
+// The generic ones (render, html_escape, human_bytes_fixed,
+// sanitize_filename_ascii, format_clock, rfc2822_utc) live in
+// ccc-plugin-utils; only podcast-specific formatting stays here.
 
 fn new_form_error(msg: &str) -> Response {
     render(AdminNewPage {
         error: Some(msg),
         max_mb: MAX_UPLOAD_BYTES / (1024 * 1024),
     })
-}
-
-fn sanitize_filename(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    if cleaned.is_empty() {
-        "audio.bin".into()
-    } else {
-        cleaned
-    }
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-fn human_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
 }
 
 fn format_duration(seconds: u64) -> String {
@@ -807,111 +768,16 @@ fn format_duration(seconds: u64) -> String {
     }
 }
 
-fn rfc2822_utc(ts: u64) -> String {
-    let (y, mo, d, h, mi) = unix_to_ymdhm(ts);
-    let s = (ts % 60) as u32;
-    let weekday = weekday_short(y, mo, d);
-    let month = month_short(mo);
-    format!(
-        "{}, {:02} {} {:04} {:02}:{:02}:{:02} +0000",
-        weekday, d, month, y, h, mi, s
-    )
-}
-
-fn weekday_short(y: u32, m: u32, d: u32) -> &'static str {
-    let (y2, m2) = if m < 3 { (y - 1, m + 12) } else { (y, m) };
-    let k = y2 % 100;
-    let j = y2 / 100;
-    let h = (d as i32
-        + ((13 * (m2 + 1) as i32) / 5)
-        + k as i32
-        + (k as i32) / 4
-        + (j as i32) / 4
-        + 5 * j as i32)
-        .rem_euclid(7);
-    match h {
-        0 => "Sat",
-        1 => "Sun",
-        2 => "Mon",
-        3 => "Tue",
-        4 => "Wed",
-        5 => "Thu",
-        _ => "Fri",
-    }
-}
-
-fn month_short(m: u32) -> &'static str {
-    match m {
-        1 => "Jan",
-        2 => "Feb",
-        3 => "Mar",
-        4 => "Apr",
-        5 => "May",
-        6 => "Jun",
-        7 => "Jul",
-        8 => "Aug",
-        9 => "Sep",
-        10 => "Oct",
-        11 => "Nov",
-        12 => "Dec",
-        // Months outside 1..=12 are a programmer error — the calling
-        // site should be passing a value from `unix_to_ymdhm`, which
-        // always returns 1..=12. Fall through to a clear sentinel
-        // rather than silently mis-rendering as "Dec".
-        _ => "???",
-    }
-}
-
-fn format_seconds(s: u64) -> String {
-    let h = s / 3600;
-    let m = (s % 3600) / 60;
-    let sec = s % 60;
-    if h > 0 {
-        format!("{:02}:{:02}:{:02}", h, m, sec)
-    } else {
-        format!("{:02}:{:02}", m, sec)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn weekday_short_known_dates() {
-        // Reference dates (weekday is deterministic).
-        assert_eq!(weekday_short(1970, 1, 1), "Thu"); // Unix epoch
-        assert_eq!(weekday_short(2000, 1, 1), "Sat");
-        assert_eq!(weekday_short(2024, 2, 29), "Thu"); // leap day
-        assert_eq!(weekday_short(2025, 1, 1), "Wed");
-    }
-
-    #[test]
-    fn weekday_short_zellers_century_boundary() {
-        // 2100-01-01 is a Friday, NOT a leap year (the bug the local
-        // unix_to_ymdhm had before we replaced it with the Hinnant
-        // algorithm). Pin the weekday computation to a known value
-        // so this can never silently regress.
-        assert_eq!(weekday_short(2100, 1, 1), "Fri");
-        assert_eq!(weekday_short(2000, 1, 1), "Sat"); // 2000 IS a leap year
-    }
-
-    #[test]
-    fn month_short_all_twelve() {
-        let months = [
-            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-        ];
-        for (i, expected) in months.iter().enumerate() {
-            assert_eq!(month_short(i as u32 + 1), *expected);
-        }
-        // Out-of-range months produce a sentinel rather than silently
-        // rendering as "Dec" — caller is a programmer error.
-        assert_eq!(month_short(13), "???");
-        assert_eq!(month_short(0), "???");
-    }
-
-    #[test]
     fn rfc2822_utc_format() {
+        // Consumer-side regression guard: the RSS `pubDate` produced by
+        // build_feed_response must stay byte-identical after the helper
+        // moved to ccc-plugin-utils. (The full weekday/month coverage
+        // lives next to the helper in that crate.)
         // 2024-01-15 12:34:56 UTC == 1705322096
         assert_eq!(
             rfc2822_utc(1_705_322_096),

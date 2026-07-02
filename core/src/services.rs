@@ -9,7 +9,7 @@
 //! As more services land, add more fields here. Adding a service is a
 //! one-time additive change everyone can ignore until they need it.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 /// Membership-check service plugins can publish into the registry.
 ///
@@ -36,7 +36,14 @@ impl ServiceRegistry {
     /// registrations are visible in operator logs.
     pub fn set_membership(&self, s: Arc<dyn MembershipService>) {
         {
-            let guard = self.membership.read().expect("services poisoned");
+            // A poisoned lock means some earlier holder panicked mid-access.
+            // The registry only stores a plain `Arc` — there's no multi-step
+            // invariant a panic could leave half-applied — so recover the
+            // guard and keep serving instead of crashing the whole server.
+            let guard = self
+                .membership
+                .read()
+                .unwrap_or_else(PoisonError::into_inner);
             if guard.is_some() {
                 tracing::warn!(
                     "membership service being replaced; the new provider will be active \
@@ -46,13 +53,60 @@ impl ServiceRegistry {
                 );
             }
         }
-        *self.membership.write().expect("services poisoned") = Some(s);
+        *self
+            .membership
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(s);
     }
 
     /// Look up the membership service. Returns `None` when no membership
     /// provider is active — consumers should degrade gracefully (e.g. fall
     /// back to a static token).
     pub fn membership(&self) -> Option<Arc<dyn MembershipService>> {
-        self.membership.read().expect("services poisoned").clone()
+        // See `set_membership` — a poisoned lock degrades to the last
+        // registered value rather than taking the server down.
+        self.membership
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct AlwaysYes;
+    impl MembershipService for AlwaysYes {
+        fn is_member(&self, _headers: &axum::http::HeaderMap) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn set_and_get_roundtrip() {
+        let reg = ServiceRegistry::new();
+        assert!(reg.membership().is_none());
+        reg.set_membership(Arc::new(AlwaysYes));
+        assert!(reg.membership().is_some());
+    }
+
+    #[test]
+    fn registry_survives_poisoned_lock() {
+        let reg = Arc::new(ServiceRegistry::new());
+        // Poison the RwLock: panic on another thread while holding the
+        // write guard.
+        let poisoner = Arc::clone(&reg);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.membership.write().unwrap();
+            panic!("deliberately poisoning the services lock");
+        })
+        .join();
+        assert!(reg.membership.is_poisoned());
+        // Poisoned lock must degrade, not crash: both halves of the API
+        // keep working.
+        assert!(reg.membership().is_none());
+        reg.set_membership(Arc::new(AlwaysYes));
+        assert!(reg.membership().is_some());
     }
 }
