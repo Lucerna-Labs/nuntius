@@ -103,11 +103,16 @@ impl AdminStore {
     /// Create the admin account during first-run setup. Returns an error
     /// if an account already exists — setup is one-shot.
     pub fn create_admin(&self, username: &str, password: &str) -> Result<(), AuthError> {
+        // Store the username trimmed: mobile keyboards and autofill love
+        // appending a space, and an invisible trailing space in the
+        // account file makes every future login "mysteriously" fail.
+        // Passwords are NOT trimmed — whitespace is legal there.
+        let username = username.trim();
         let mut guard = self.inner.write().expect("admin store poisoned");
         if guard.admin.is_some() {
             return Err(AuthError::AlreadyInitialized);
         }
-        if username.trim().is_empty() {
+        if username.is_empty() {
             return Err(AuthError::Validation("username must not be empty".into()));
         }
         if password.len() < 8 {
@@ -133,7 +138,9 @@ impl AdminStore {
             Some(a) => a,
             None => return false,
         };
-        if admin.username != username {
+        // Trim both sides: tolerates sloppy login input AND accounts
+        // created before create_admin trimmed on write.
+        if admin.username.trim() != username.trim() {
             return false;
         }
         verify_password(password, &admin.password_hash).unwrap_or(false)
@@ -297,6 +304,24 @@ mod tests {
         // Credentials survive a reload from disk.
         let reloaded = AdminStore::load_or_init(&path).unwrap();
         assert!(reloaded.verify_login("alice", "correct horse"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn usernames_are_whitespace_tolerant() {
+        // The real-world failure: mobile autofill appends a space during
+        // setup, then login with the clean username fails forever.
+        let path = tmp_path("trim");
+        let _ = std::fs::remove_file(&path);
+        let store = AdminStore::load_or_init(&path).unwrap();
+        store.create_admin("Lucerna ", "correct horse").unwrap();
+        // Stored canonically…
+        assert_eq!(store.admin().unwrap().username, "Lucerna");
+        // …and login tolerates sloppy input on either side.
+        assert!(store.verify_login("Lucerna", "correct horse"));
+        assert!(store.verify_login("  Lucerna  ", "correct horse"));
+        // Passwords are never trimmed.
+        assert!(!store.verify_login("Lucerna", "correct horse "));
         let _ = std::fs::remove_file(&path);
     }
 

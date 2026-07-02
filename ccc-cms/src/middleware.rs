@@ -48,7 +48,11 @@ pub fn session_is_valid(store: &AdminStore, cookies: &Cookies) -> bool {
     };
     let key = Key::from(&store.cookie_key);
     match cookies.signed(&key).get(SESSION_COOKIE) {
-        Some(cookie) => parse_session(cookie.value()) == Some(admin.username.as_str()),
+        // Trimmed comparison for the same reason verify_login trims:
+        // accounts created before usernames were trimmed on write.
+        Some(cookie) => {
+            parse_session(cookie.value()).map(str::trim) == Some(admin.username.trim())
+        }
         None => false,
     }
 }

@@ -131,7 +131,9 @@ async fn setup_post(
 
     match ctx.store.create_admin(&form.username, &form.password) {
         Ok(()) => {
-            issue_session_cookie(&ctx.store, &cookies, &form.username);
+            // The store trims the username on write; the cookie must
+            // carry the same canonical form.
+            issue_session_cookie(&ctx.store, &cookies, form.username.trim());
             Redirect::to("/admin/").into_response()
         }
         Err(e) => SetupPage {
@@ -174,7 +176,7 @@ async fn login_post(
     }
 
     if ctx.store.verify_login(&form.username, &form.password) {
-        issue_session_cookie(&ctx.store, &cookies, &form.username);
+        issue_session_cookie(&ctx.store, &cookies, form.username.trim());
         Redirect::to("/admin/").into_response()
     } else {
         // Re-render with the username preserved so the operator only has
