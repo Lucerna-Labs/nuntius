@@ -13,6 +13,7 @@
 //! routes from other plugins do not mount. See the `Plugin::admin_routes`
 //! security invariant in `ccc-core`.
 
+use axum::Router;
 use ccc_core::{AppContext, Plugin, PluginError, PluginLifecycle, PluginStatus};
 use std::any::Any;
 use std::path::PathBuf;
@@ -122,11 +123,15 @@ impl Plugin for CmsPlugin {
         Ok(())
     }
 
-    // Note: no `routes()` here. The `/admin` tree is built by the host
+    // Note: the `/admin` tree is NOT built here. The host assembles it
     // via `ccc_cms::routes::build_admin_tree(store, plugin_admin)` so it
     // can include every other enabled plugin's `admin_routes()`. Doing
     // it inside this `routes()` impl would mean the CMS plugin couldn't
-    // see what its sibling plugins contributed.
+    // see what its sibling plugins contributed. Only the small *public*
+    // surface (shared listener-page assets) mounts through `routes()`.
+    fn routes(&self, _ctx: &AppContext) -> Option<Router> {
+        Some(routes::build_public_routes())
+    }
 
     fn as_any(&self) -> &dyn Any {
         self

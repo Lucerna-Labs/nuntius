@@ -247,3 +247,73 @@ impl From<std::io::Error> for AuthError {
         AuthError::Io(e)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    fn tmp_path(name: &str) -> PathBuf {
+        let mut p = env::temp_dir();
+        p.push(format!("ccc-cms-auth-test-{name}-{}", std::process::id()));
+        p.set_extension("toml");
+        p
+    }
+
+    #[test]
+    fn load_or_init_generates_and_persists_cookie_key() {
+        let path = tmp_path("init");
+        let _ = std::fs::remove_file(&path);
+        let store = AdminStore::load_or_init(&path).unwrap();
+        assert!(!store.is_initialized());
+        // tower_cookies::Key needs 64 bytes (signing + encryption).
+        assert!(store.cookie_key.len() >= 64);
+        assert!(path.exists(), "sidecar should be written on first init");
+
+        // Reload keeps the same key — sessions must survive restarts.
+        let reloaded = AdminStore::load_or_init(&path).unwrap();
+        assert_eq!(reloaded.cookie_key, store.cookie_key);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn create_admin_and_verify_login() {
+        let path = tmp_path("verify");
+        let _ = std::fs::remove_file(&path);
+        let store = AdminStore::load_or_init(&path).unwrap();
+        store.create_admin("alice", "correct horse").unwrap();
+        assert!(store.is_initialized());
+
+        assert!(store.verify_login("alice", "correct horse"));
+        assert!(!store.verify_login("alice", "wrong password"));
+        assert!(!store.verify_login("bob", "correct horse"));
+
+        // Second setup attempt must fail — setup is one-shot.
+        assert!(matches!(
+            store.create_admin("mallory", "password123"),
+            Err(AuthError::AlreadyInitialized)
+        ));
+
+        // Credentials survive a reload from disk.
+        let reloaded = AdminStore::load_or_init(&path).unwrap();
+        assert!(reloaded.verify_login("alice", "correct horse"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn create_admin_validates_input() {
+        let path = tmp_path("validate");
+        let _ = std::fs::remove_file(&path);
+        let store = AdminStore::load_or_init(&path).unwrap();
+        assert!(matches!(
+            store.create_admin("", "password123"),
+            Err(AuthError::Validation(_))
+        ));
+        assert!(matches!(
+            store.create_admin("alice", "short"),
+            Err(AuthError::Validation(_))
+        ));
+        assert!(!store.is_initialized());
+        let _ = std::fs::remove_file(&path);
+    }
+}

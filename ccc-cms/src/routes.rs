@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Form, Path, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Json, Redirect, Response},
     routing::get,
     Router,
@@ -20,8 +20,10 @@ use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::ServeDir;
 
 use crate::auth::AdminStore;
-use crate::middleware::{require_login, session_value, SESSION_COOKIE};
-use crate::templates::{DashboardPage, SetupPage};
+use crate::middleware::{
+    require_login, security_headers, session_is_valid, session_value, SESSION_COOKIE,
+};
+use crate::templates::{DashboardPage, LoginPage, SetupPage};
 
 /// State assembled by the host and passed into the admin tree.
 ///
@@ -59,7 +61,9 @@ pub fn build_admin_tree(ctx: DashboardCtx, plugin_admin: Router) -> Router {
     let inner = Router::new()
         .route("/setup", get(setup_get).post(setup_post))
         .route("/login", get(login_get).post(login_post))
-        .route("/logout", get(logout))
+        // GET keeps the shell's plain "Sign out" anchors working; POST is
+        // the CSRF-safer form for programmatic clients.
+        .route("/logout", get(logout).post(logout))
         .route("/", get(dashboard))
         .route("/api/plugins", get(api_plugins))
         .route("/api/plugins/:id/status", get(api_plugin_status))
@@ -70,7 +74,10 @@ pub fn build_admin_tree(ctx: DashboardCtx, plugin_admin: Router) -> Router {
             store.clone(),
             require_login,
         ))
-        .layer(CookieManagerLayer::new());
+        .layer(CookieManagerLayer::new())
+        // Outermost so the headers also land on auth redirects and static
+        // assets, not just handler-rendered pages.
+        .layer(axum::middleware::from_fn(security_headers));
 
     // axum 0.7's `nest("/admin", inner)` matches `/admin` but NOT `/admin/`
     // when the inner router has a `/` route. Add an explicit redirect so
@@ -142,11 +149,19 @@ pub struct LoginForm {
     password: String,
 }
 
-async fn login_get(State(ctx): State<DashboardCtx>) -> Response {
+async fn login_get(State(ctx): State<DashboardCtx>, cookies: Cookies) -> Response {
     if !ctx.store.is_initialized() {
         return Redirect::to("/admin/setup").into_response();
     }
-    Redirect::to("/admin/").into_response()
+    // Already signed in — skip the form and land on the dashboard.
+    if session_is_valid(&ctx.store, &cookies) {
+        return Redirect::to("/admin/").into_response();
+    }
+    LoginPage {
+        error: None,
+        username: "",
+    }
+    .into_response()
 }
 
 async fn login_post(
@@ -162,7 +177,14 @@ async fn login_post(
         issue_session_cookie(&ctx.store, &cookies, &form.username);
         Redirect::to("/admin/").into_response()
     } else {
-        Redirect::to("/admin/").into_response()
+        // Re-render with the username preserved so the operator only has
+        // to retype the password. Deliberately vague message — don't leak
+        // which half was wrong.
+        LoginPage {
+            error: Some("Invalid username or password."),
+            username: &form.username,
+        }
+        .into_response()
     }
 }
 
@@ -171,8 +193,12 @@ async fn login_post(
 async fn logout(State(ctx): State<DashboardCtx>, cookies: Cookies) -> Response {
     let key = tower_cookies::Key::from(&ctx.store.cookie_key);
     let signed = cookies.signed(&key);
-    signed.remove(Cookie::new(SESSION_COOKIE, ""));
-    Redirect::to("/admin/").into_response()
+    // The removal cookie must carry the same path the session was issued
+    // with, or the browser keeps the original alive.
+    let mut cookie = Cookie::new(SESSION_COOKIE, "");
+    cookie.set_path("/admin");
+    signed.remove(cookie);
+    Redirect::to("/admin/login").into_response()
 }
 
 // ---------- Dashboard ----------
@@ -200,6 +226,35 @@ async fn api_plugin_status(State(ctx): State<DashboardCtx>, Path(id): Path<Strin
     match ctx.plugin_manager.plugin_status(&ctx.app_ctx, &id) {
         Some(status) => Json(status).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+// ---------- Public assets (mounted via `CmsPlugin::routes`, NOT /admin) ----------
+
+/// Router for the CMS plugin's *public* surface. Currently just the
+/// shared stylesheet that listener-facing pages (radio player, etc.)
+/// link. Merged into the host's root router by `PluginManager`, so no
+/// auth middleware applies here — everything on it must be safe to serve
+/// anonymously.
+pub fn build_public_routes() -> Router {
+    Router::new().route("/assets/public.css", get(serve_public_css))
+}
+
+/// Serve `static/public.css` with a short public cache. The file is
+/// authored by the front-end lane and may not exist yet — a missing file
+/// is a plain 404, not an error.
+async fn serve_public_css() -> Response {
+    let path = static_assets_dir().join("public.css");
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+                (header::CACHE_CONTROL, "public, max-age=300"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
