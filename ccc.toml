@@ -10,6 +10,12 @@
 host = "0.0.0.0"
 port = 3000
 
+[site]
+# What THIS deployment calls itself on public pages (header brand, page
+# titles, RSS channel names). Every operator sets their own; "Nuntius"
+# is only the out-of-the-box fallback.
+name = "Lucerna Radio"
+
 [database]
 path = "ccc.redb"
 

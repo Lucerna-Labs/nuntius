@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Blog — Nuntius</title>
-  <meta name="description" content="Latest posts published from this Nuntius station.">
+  <title>Blog — {{ site_name }}</title>
+  <meta name="description" content="Latest posts from {{ site_name }}.">
   <meta name="theme-color" content="#07090d">
-  <meta property="og:title" content="Blog — Nuntius">
+  <meta property="og:title" content="Blog — {{ site_name }}">
   <meta property="og:type" content="website">
-  <meta property="og:description" content="Latest posts published from this Nuntius station.">
+  <meta property="og:description" content="Latest posts from {{ site_name }}.">
   <meta name="twitter:card" content="summary">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -45,7 +45,7 @@
 <body class="nuntius-public">
   <div class="pub-wrap">
     <header class="pub-top">
-      <a class="pub-brand" href="/">Nuntius</a>
+      <a class="pub-brand" href="/">{{ site_name }}</a>
       <nav class="pub-nav" aria-label="Site">
         <a href="/radio">Live radio</a>
         <a href="/podcasts">Podcasts</a>

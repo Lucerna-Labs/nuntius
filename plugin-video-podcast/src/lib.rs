@@ -52,6 +52,10 @@ pub struct VideoPodcastPlugin {
     pub hls_base_path: String,
     source_dir: PathBuf,
     ffmpeg: String,
+    /// Operator-configured site name (`[site] name` in ccc.toml). Brands
+    /// the public pages as THIS deployment; the "Powered by Nuntius"
+    /// footer stays platform attribution.
+    site_name: String,
 }
 
 impl VideoPodcastPlugin {
@@ -60,6 +64,7 @@ impl VideoPodcastPlugin {
             hls_base_path: hls_base_path.to_string(),
             source_dir: PathBuf::from(DEFAULT_SOURCE_DIR),
             ffmpeg: DEFAULT_FFMPEG.to_string(),
+            site_name: "Nuntius".to_string(),
         }
     }
 
@@ -84,6 +89,7 @@ impl VideoPodcastPlugin {
             hls_base_path: hls_dir,
             source_dir,
             ffmpeg,
+            site_name: cfg.site.name.clone(),
         }
     }
 }
@@ -94,6 +100,7 @@ struct AppState {
     hls_dir: Arc<PathBuf>,
     source_dir: Arc<PathBuf>,
     ffmpeg: Arc<String>,
+    site_name: Arc<String>,
     /// One-shot guard for the background transcode worker. Replaces
     /// the old `static SPAWNED: AtomicBool` pattern that didn't work
     /// if you ever constructed two plugin instances (tests, hot-reload).
@@ -164,6 +171,7 @@ impl Plugin for VideoPodcastPlugin {
             hls_dir: Arc::new(PathBuf::from(&self.hls_base_path)),
             source_dir: Arc::new(self.source_dir.clone()),
             ffmpeg: Arc::new(self.ffmpeg.clone()),
+            site_name: Arc::new(self.site_name.clone()),
             transcode_worker_spawned: Arc::new(AtomicBool::new(false)),
         };
         Some(
@@ -185,6 +193,7 @@ impl Plugin for VideoPodcastPlugin {
             hls_dir: Arc::new(PathBuf::from(&self.hls_base_path)),
             source_dir: Arc::new(self.source_dir.clone()),
             ffmpeg: Arc::new(self.ffmpeg.clone()),
+            site_name: Arc::new(self.site_name.clone()),
             transcode_worker_spawned: Arc::new(AtomicBool::new(false)),
         };
         spawn_transcode_worker(state.clone());
@@ -380,6 +389,7 @@ fn finish_failed(state: &AppState, mut video: VideoPodcast, err: String) {
 #[derive(Template)]
 #[template(path = "public_index.html")]
 struct PublicIndexPage {
+    site_name: String,
     videos: Vec<PublicVideoRow>,
     upcoming: Vec<PublicVideoRow>,
 }
@@ -411,7 +421,11 @@ async fn public_index(State(state): State<AppState>) -> Response {
         .map(public_video_row)
         .collect();
 
-    render(PublicIndexPage { videos, upcoming })
+    render(PublicIndexPage {
+        site_name: state.site_name.as_ref().clone(),
+        videos,
+        upcoming,
+    })
 }
 
 fn public_video_row(v: VideoPodcast) -> PublicVideoRow {
@@ -431,6 +445,7 @@ fn public_video_row(v: VideoPodcast) -> PublicVideoRow {
 #[derive(Template)]
 #[template(path = "public_show.html")]
 struct PublicShowPage {
+    site_name: String,
     title: String,
     description: String,
     hls_dir: String,
@@ -445,6 +460,7 @@ async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) ->
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     render(PublicShowPage {
+        site_name: state.site_name.as_ref().clone(),
         title: v.title,
         description: v.description,
         hls_dir: v.hls_directory,
@@ -725,4 +741,44 @@ fn new_form_error(msg: &str) -> Response {
         error: Some(msg),
         max_mb: MAX_UPLOAD_BYTES / (1024 * 1024),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_pages_render_the_configured_site_name() {
+        let html = PublicIndexPage {
+            site_name: "Radio Free Harbor".into(),
+            videos: Vec::new(),
+            upcoming: Vec::new(),
+        }
+        .render()
+        .unwrap();
+        assert!(
+            html.contains("<title>Video - Radio Free Harbor</title>"),
+            "title should carry the site name: {html}"
+        );
+        assert!(
+            html.contains(">Radio Free Harbor</a>"),
+            "brand link should carry the site name: {html}"
+        );
+        assert!(html.contains("On-demand video episodes from Radio Free Harbor."));
+        // Platform attribution is deliberate and must stay.
+        assert!(html.contains("Powered by Nuntius"));
+
+        let show = PublicShowPage {
+            site_name: "Radio Free Harbor".into(),
+            title: "Hello".into(),
+            description: "First".into(),
+            hls_dir: "1-hello".into(),
+            duration: "01:01".into(),
+            published_human: "Jan 1, 2026".into(),
+        }
+        .render()
+        .unwrap();
+        assert!(show.contains(">Radio Free Harbor</a>"));
+        assert!(show.contains("Powered by Nuntius"));
+    }
 }

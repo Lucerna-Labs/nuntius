@@ -59,6 +59,10 @@ const DEFAULT_MEMBERS_TOKEN: &str = "change-me";
 pub struct PodcastPlugin {
     audio_dir: PathBuf,
     members_token: String,
+    /// Operator-configured site name (`[site] name` in ccc.toml). Used to
+    /// brand public pages and the RSS channel as THIS deployment; the
+    /// "Powered by Nuntius" footer stays platform attribution.
+    site_name: String,
 }
 
 impl PodcastPlugin {
@@ -66,6 +70,7 @@ impl PodcastPlugin {
         Self {
             audio_dir: PathBuf::from(audio_dir),
             members_token: DEFAULT_MEMBERS_TOKEN.to_string(),
+            site_name: "Nuntius".to_string(),
         }
     }
 
@@ -84,6 +89,7 @@ impl PodcastPlugin {
         Self {
             audio_dir: PathBuf::from(audio_dir),
             members_token,
+            site_name: cfg.site.name.clone(),
         }
     }
 }
@@ -93,6 +99,7 @@ struct AppState {
     db: Arc<CccDB>,
     audio_dir: Arc<PathBuf>,
     members_token: Arc<String>,
+    site_name: Arc<String>,
     events: Arc<EventBus>,
     services: Arc<ServiceRegistry>,
 }
@@ -167,6 +174,7 @@ impl Plugin for PodcastPlugin {
             db: ctx.db.clone(),
             audio_dir: Arc::new(self.audio_dir.clone()),
             members_token: Arc::new(self.members_token.clone()),
+            site_name: Arc::new(self.site_name.clone()),
             events: ctx.events.clone(),
             services: ctx.services.clone(),
         };
@@ -186,6 +194,7 @@ impl Plugin for PodcastPlugin {
             db: ctx.db.clone(),
             audio_dir: Arc::new(self.audio_dir.clone()),
             members_token: Arc::new(self.members_token.clone()),
+            site_name: Arc::new(self.site_name.clone()),
             events: ctx.events.clone(),
             services: ctx.services.clone(),
         };
@@ -224,6 +233,7 @@ impl Plugin for PodcastPlugin {
 #[derive(Template)]
 #[template(path = "public_index.html")]
 struct PublicIndexPage {
+    site_name: String,
     episodes: Vec<PublicEpisodeRow>,
     upcoming: Vec<PublicEpisodeRow>,
 }
@@ -259,7 +269,11 @@ async fn public_index(State(state): State<AppState>) -> Response {
         .map(public_episode_row)
         .collect();
 
-    render(PublicIndexPage { episodes, upcoming })
+    render(PublicIndexPage {
+        site_name: state.site_name.as_ref().clone(),
+        episodes,
+        upcoming,
+    })
 }
 
 fn public_episode_row(ep: PodcastEpisode) -> PublicEpisodeRow {
@@ -282,7 +296,11 @@ async fn public_feed(State(state): State<AppState>) -> Response {
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     let episodes: Vec<_> = raw.into_iter().filter(|e| !e.members_only).collect();
-    build_feed_response("Nuntius Podcast", &episodes)
+    build_feed_response(
+        &format!("{} Podcast", state.site_name),
+        &state.site_name,
+        &episodes,
+    )
 }
 
 #[derive(Deserialize)]
@@ -302,7 +320,11 @@ async fn public_members_feed(
         Ok(v) => v,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    build_feed_response("Nuntius Podcast (Members)", &episodes)
+    build_feed_response(
+        &format!("{} Podcast (Members)", state.site_name),
+        &state.site_name,
+        &episodes,
+    )
 }
 
 /// Members are admitted if EITHER:
@@ -327,7 +349,15 @@ fn members_authorized(
     false
 }
 
-fn build_feed_response(title: &str, episodes: &[ccc_database::PodcastEpisode]) -> Response {
+/// Compose the RSS channel. `site_name` is the operator-configured
+/// deployment identity ([site] name in ccc.toml) — it brands the channel
+/// description and iTunes author. Split from `build_feed_response` so the
+/// channel content is unit-testable without an axum body.
+fn build_feed_channel(
+    title: &str,
+    site_name: &str,
+    episodes: &[ccc_database::PodcastEpisode],
+) -> rss::Channel {
     let mut items = Vec::with_capacity(episodes.len());
     for ep in episodes {
         let pub_ts = ep.published_at.unwrap_or(ep.updated_at);
@@ -363,19 +393,25 @@ fn build_feed_response(title: &str, episodes: &[ccc_database::PodcastEpisode]) -
         items.push(item);
     }
 
-    let channel = ChannelBuilder::default()
+    ChannelBuilder::default()
         .title(title)
         .link("/podcasts/feed.xml")
-        .description("Episodes published from this Nuntius.")
+        .description(format!("Episodes published by {}.", site_name))
         .itunes_ext(Some(
             ITunesChannelExtensionBuilder::default()
-                .author(Some("Nuntius".into()))
+                .author(Some(site_name.to_string()))
                 .build(),
         ))
         .items(items)
-        .build();
+        .build()
+}
 
-    let xml = channel.to_string();
+fn build_feed_response(
+    title: &str,
+    site_name: &str,
+    episodes: &[ccc_database::PodcastEpisode],
+) -> Response {
+    let xml = build_feed_channel(title, site_name, episodes).to_string();
     (
         [(header::CONTENT_TYPE, "application/rss+xml; charset=utf-8")],
         xml,
@@ -386,6 +422,7 @@ fn build_feed_response(title: &str, episodes: &[ccc_database::PodcastEpisode]) -
 #[derive(Template)]
 #[template(path = "public_show.html")]
 struct PublicShowPage {
+    site_name: String,
     id: u64,
     title: String,
     description: String,
@@ -400,6 +437,7 @@ async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) ->
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     render(PublicShowPage {
+        site_name: state.site_name.as_ref().clone(),
         id: ep.id,
         title: ep.title,
         description: ep.description,
@@ -785,5 +823,42 @@ mod tests {
         );
         // Epoch
         assert_eq!(rfc2822_utc(0), "Thu, 01 Jan 1970 00:00:00 +0000");
+    }
+
+    #[test]
+    fn feed_channel_carries_the_configured_site_name() {
+        let ep = PodcastEpisode {
+            id: 7,
+            slug: "hello".into(),
+            title: "Hello World".into(),
+            description: "First episode".into(),
+            audio_path: "/tmp/hello.mp3".into(),
+            mime_type: "audio/mpeg".into(),
+            size_bytes: 1234,
+            duration_seconds: 61,
+            status: EpisodeStatus::Published,
+            created_at: 1_705_322_096,
+            updated_at: 1_705_322_096,
+            published_at: Some(1_705_322_096),
+            transcript_job_id: None,
+            members_only: false,
+        };
+        let ch = build_feed_channel(
+            "Radio Free Harbor Podcast",
+            "Radio Free Harbor",
+            std::slice::from_ref(&ep),
+        );
+        assert_eq!(ch.title(), "Radio Free Harbor Podcast");
+        assert_eq!(ch.description(), "Episodes published by Radio Free Harbor.");
+        assert_eq!(
+            ch.itunes_ext().and_then(|e| e.author()),
+            Some("Radio Free Harbor")
+        );
+        let xml = ch.to_string();
+        assert!(xml.contains("Hello World"), "item lost: {xml}");
+        assert!(
+            !xml.contains("Nuntius"),
+            "platform name leaked into the public feed: {xml}"
+        );
     }
 }

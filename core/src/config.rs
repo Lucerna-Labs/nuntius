@@ -14,10 +14,35 @@ pub struct CccConfig {
     #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
+    pub site: SiteConfig,
+    #[serde(default)]
     pub plugins: PluginsConfig,
     /// Per-plugin configuration sections. Each plugin reads its own subtable.
     #[serde(default)]
     pub plugin: toml::value::Table,
+}
+
+/// Deployment identity — what THIS site calls itself on public pages
+/// (header brand, page titles, RSS channel names). Operators set their
+/// own name here; "Nuntius" is only the out-of-the-box fallback and
+/// remains the platform's name in admin chrome and "Powered by" lines
+/// regardless of this setting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SiteConfig {
+    #[serde(default = "default_site_name")]
+    pub name: String,
+}
+
+fn default_site_name() -> String {
+    "Nuntius".into()
+}
+
+impl Default for SiteConfig {
+    fn default() -> Self {
+        Self {
+            name: default_site_name(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +127,7 @@ impl Default for CccConfig {
         Self {
             server: ServerConfig::default(),
             database: DatabaseConfig::default(),
+            site: SiteConfig::default(),
             plugins: PluginsConfig::default(),
             plugin: toml::value::Table::new(),
         }

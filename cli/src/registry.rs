@@ -27,7 +27,7 @@ pub fn register_by_name(
             manager.register(plugin)?;
         }
         "blog" => {
-            manager.register(ccc_plugin_blog::StaticBlogPlugin)?;
+            manager.register(ccc_plugin_blog::StaticBlogPlugin::from_config(cfg))?;
         }
         "podcast" => {
             manager.register(ccc_plugin_podcast::PodcastPlugin::from_config(cfg))?;

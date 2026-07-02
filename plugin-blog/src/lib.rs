@@ -27,8 +27,31 @@ use serde::Deserialize;
 use std::any::Any;
 use std::sync::Arc;
 
-#[derive(Default)]
-pub struct StaticBlogPlugin;
+/// Blog plugin. Carries the operator-configured site name (`[site] name`
+/// in `ccc.toml`) so the public pages brand themselves as the deployment,
+/// not the platform. "Powered by Nuntius" footers are deliberate platform
+/// attribution and stay hardcoded in the templates.
+pub struct StaticBlogPlugin {
+    site_name: String,
+}
+
+impl Default for StaticBlogPlugin {
+    fn default() -> Self {
+        Self {
+            site_name: "Nuntius".into(),
+        }
+    }
+}
+
+impl StaticBlogPlugin {
+    /// Build from the loaded `CccConfig`, capturing `[site] name` for the
+    /// public-facing pages.
+    pub fn from_config(cfg: &ccc_core::CccConfig) -> Self {
+        Self {
+            site_name: cfg.site.name.clone(),
+        }
+    }
+}
 
 impl Plugin for StaticBlogPlugin {
     fn name(&self) -> &'static str {
@@ -91,11 +114,19 @@ impl Plugin for StaticBlogPlugin {
     }
 
     fn routes(&self, ctx: &AppContext) -> Option<Router> {
-        Some(public_router(ctx.db.clone(), ctx.events.clone()))
+        Some(public_router(
+            ctx.db.clone(),
+            ctx.events.clone(),
+            self.site_name.clone(),
+        ))
     }
 
     fn admin_routes(&self, ctx: &AppContext) -> Option<Router> {
-        Some(admin_router(ctx.db.clone(), ctx.events.clone()))
+        Some(admin_router(
+            ctx.db.clone(),
+            ctx.events.clone(),
+            self.site_name.clone(),
+        ))
     }
 
     fn admin_nav(&self, _ctx: &AppContext) -> Vec<AdminNavEntry> {
@@ -120,18 +151,25 @@ impl Plugin for StaticBlogPlugin {
 struct AppState {
     db: Arc<CccDB>,
     events: Arc<EventBus>,
+    /// Operator-configured site name rendered into public page chrome.
+    site_name: Arc<String>,
 }
 
-fn public_router(db: Arc<CccDB>, events: Arc<EventBus>) -> Router {
+fn public_router(db: Arc<CccDB>, events: Arc<EventBus>, site_name: String) -> Router {
     Router::new()
         .route("/blog/", get(public_index))
         .route("/blog/:slug", get(public_show))
-        .with_state(AppState { db, events })
+        .with_state(AppState {
+            db,
+            events,
+            site_name: Arc::new(site_name),
+        })
 }
 
 #[derive(Template)]
 #[template(path = "public_index.html")]
 struct PublicIndex {
+    site_name: String,
     posts: Vec<PublicPostSummary>,
 }
 
@@ -154,12 +192,16 @@ async fn public_index(State(state): State<AppState>) -> Response {
             published_human: format_unix(p.published_at.unwrap_or(p.updated_at)),
         })
         .collect();
-    render(PublicIndex { posts })
+    render(PublicIndex {
+        site_name: state.site_name.as_ref().clone(),
+        posts,
+    })
 }
 
 #[derive(Template)]
 #[template(path = "public_post.html")]
 struct PublicPost {
+    site_name: String,
     title: String,
     rendered_html: String,
     published_human: String,
@@ -175,6 +217,7 @@ async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) ->
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     render(PublicPost {
+        site_name: state.site_name.as_ref().clone(),
         title: post.title.clone(),
         rendered_html: render_post_html(&post.content),
         published_human: format_unix(post.published_at.unwrap_or(post.updated_at)),
@@ -186,7 +229,7 @@ async fn public_show(State(state): State<AppState>, Path(slug): Path<String>) ->
 // Admin routes (mounted under /admin)
 // ============================================================================
 
-fn admin_router(db: Arc<CccDB>, events: Arc<EventBus>) -> Router {
+fn admin_router(db: Arc<CccDB>, events: Arc<EventBus>, site_name: String) -> Router {
     // Paths are *relative* to the /admin nest prefix the CMS owns.
     // The full URL becomes /admin/blog/posts etc.
     Router::new()
@@ -197,7 +240,11 @@ fn admin_router(db: Arc<CccDB>, events: Arc<EventBus>) -> Router {
             get(admin_edit_form).post(admin_update),
         )
         .route("/blog/posts/:id/delete", post(admin_delete))
-        .with_state(AppState { db, events })
+        .with_state(AppState {
+            db,
+            events,
+            site_name: Arc::new(site_name),
+        })
 }
 
 #[derive(Template)]
@@ -482,6 +529,42 @@ mod tests {
     #[test]
     fn excerpt_of_empty_body_is_empty() {
         assert_eq!(markdown_excerpt("", 160), "");
+    }
+
+    #[test]
+    fn public_pages_render_the_configured_site_name() {
+        let html = PublicIndex {
+            site_name: "Radio Free Harbor".into(),
+            posts: Vec::new(),
+        }
+        .render()
+        .unwrap();
+        assert!(
+            html.contains("<title>Blog — Radio Free Harbor</title>"),
+            "title should carry the site name: {html}"
+        );
+        assert!(
+            html.contains(">Radio Free Harbor</a>"),
+            "brand link should carry the site name: {html}"
+        );
+        assert!(
+            html.contains("Latest posts from Radio Free Harbor."),
+            "lede/description should carry the site name: {html}"
+        );
+        // Platform attribution is deliberate and must stay.
+        assert!(html.contains("Powered by Nuntius"));
+
+        let post = PublicPost {
+            site_name: "Radio Free Harbor".into(),
+            title: "Hello".into(),
+            rendered_html: "<p>hi</p>".into(),
+            published_human: "Jan 1, 2026".into(),
+            meta_description: "hi".into(),
+        }
+        .render()
+        .unwrap();
+        assert!(post.contains(">Radio Free Harbor</a>"));
+        assert!(post.contains("Powered by Nuntius"));
     }
 
     #[test]

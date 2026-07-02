@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Video - Nuntius</title>
-  <meta name="description" content="On-demand video episodes from Nuntius.">
+  <title>Video - {{ site_name }}</title>
+  <meta name="description" content="On-demand video episodes from {{ site_name }}.">
   <meta name="theme-color" content="#07090d">
-  <meta property="og:title" content="Video - Nuntius">
+  <meta property="og:title" content="Video - {{ site_name }}">
   <meta property="og:type" content="website">
-  <meta property="og:description" content="On-demand video episodes from Nuntius.">
+  <meta property="og:description" content="On-demand video episodes from {{ site_name }}.">
   <meta name="twitter:card" content="summary">
-  <link rel="alternate" type="application/rss+xml" title="Nuntius Podcast" href="/podcasts/feed.xml">
+  <link rel="alternate" type="application/rss+xml" title="{{ site_name }} Podcast" href="/podcasts/feed.xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
@@ -52,7 +52,7 @@
 <body class="nuntius-public">
   <div class="pub-wrap">
     <header class="pub-top">
-      <a class="pub-brand" href="/">Nuntius</a>
+      <a class="pub-brand" href="/">{{ site_name }}</a>
       <nav class="pub-nav" aria-label="Site">
         <a href="/radio">Live radio</a>
         <a href="/podcasts">Podcasts</a>
@@ -65,7 +65,7 @@
       <div class="page-head">
         <span class="pub-kicker">On demand</span>
         <h1>Video</h1>
-        <p class="lede">On-demand video episodes from Nuntius.</p>
+        <p class="lede">On-demand video episodes from {{ site_name }}.</p>
       </div>
 
       <section class="pub-section" aria-label="Published videos">

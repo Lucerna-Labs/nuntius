@@ -63,6 +63,11 @@ impl Default for NewsletterSettings {
             username: String::new(),
             password: String::new(),
             from_email: String::new(),
+            // Deliberately the platform name: this Default is the serde
+            // fallback for the TOML sidecar and cannot see ccc.toml. The
+            // literal "Nuntius" acts as an "operator never touched this"
+            // sentinel — at send time it is swapped for the configured
+            // `[site] name` (see `effective_from_name`), never persisted.
             from_name: "Nuntius".into(),
             auto_send_blog_posts: false,
             site_url: String::new(),
@@ -80,6 +85,10 @@ pub type SettingsStore = ccc_plugin_utils::TomlSidecar<NewsletterSettings>;
 
 pub struct CccPluginNewsletterPlugin {
     settings: Arc<SettingsStore>,
+    /// Operator-configured site name (`[site] name` in ccc.toml). Brands
+    /// the public subscribe page and substitutes for the untouched
+    /// `from_name` default when sending (see `effective_from_name`).
+    site_name: String,
 }
 
 impl CccPluginNewsletterPlugin {
@@ -95,7 +104,18 @@ impl CccPluginNewsletterPlugin {
             SettingsStore::load_or_init(&path)
                 .map_err(|e| PluginError::InitError(e.to_string()))?,
         );
-        Ok(Self { settings: store })
+        // `from_name` override: the sidecar's serde Default hard-codes
+        // "Nuntius" because it cannot see ccc.toml. When the stored value
+        // is still exactly that untouched default, the configured site
+        // name is substituted at send time (`effective_from_name`) —
+        // in memory only, never written back to newsletter.toml, so an
+        // operator edit in the admin settings UI always wins. (The
+        // TomlSidecar store has no non-persisting mutator, so the swap
+        // happens at the point of use rather than here.)
+        Ok(Self {
+            settings: store,
+            site_name: cfg.site.name.clone(),
+        })
     }
 }
 
@@ -169,7 +189,10 @@ impl Plugin for CccPluginNewsletterPlugin {
                     "/newsletter/subscribe",
                     get(public_subscribe_get).post(public_subscribe_post),
                 )
-                .with_state(PublicState { db: ctx.db.clone() }),
+                .with_state(PublicState {
+                    db: ctx.db.clone(),
+                    site_name: Arc::new(self.site_name.clone()),
+                }),
         )
     }
 
@@ -177,6 +200,7 @@ impl Plugin for CccPluginNewsletterPlugin {
         let admin_state = AdminState {
             db: ctx.db.clone(),
             settings: self.settings.clone(),
+            site_name: Arc::new(self.site_name.clone()),
         };
         // Spawn the cross-plugin event subscriber once, idempotently.
         spawn_event_listener(admin_state.clone(), ctx.events.clone());
@@ -272,7 +296,11 @@ async fn handle_blog_published(state: &AdminState, post_id: u64) {
         }
     };
 
-    let from = format!("{} <{}>", snap.from_name, snap.from_email);
+    let from = format!(
+        "{} <{}>",
+        effective_from_name(&snap.from_name, &state.site_name),
+        snap.from_email
+    );
     let subject = format!("New post: {}", post.title);
     let read_more = if snap.site_url.is_empty() {
         format!("/blog/{}", post.slug)
@@ -332,17 +360,21 @@ async fn handle_blog_published(state: &AdminState, post_id: u64) {
 #[derive(Clone)]
 struct PublicState {
     db: Arc<CccDB>,
+    /// Operator-configured site name rendered into public page chrome.
+    site_name: Arc<String>,
 }
 
 #[derive(Template)]
 #[template(path = "public_subscribe.html")]
 struct PublicSubscribePage<'a> {
+    site_name: String,
     success: Option<bool>,
     error: Option<&'a str>,
 }
 
-async fn public_subscribe_get() -> Response {
+async fn public_subscribe_get(State(state): State<PublicState>) -> Response {
     render(PublicSubscribePage {
+        site_name: state.site_name.as_ref().clone(),
         success: None,
         error: None,
     })
@@ -360,6 +392,7 @@ async fn public_subscribe_post(
     let email = form.email.trim().to_lowercase();
     if email.is_empty() || !email.contains('@') {
         return render(PublicSubscribePage {
+            site_name: state.site_name.as_ref().clone(),
             success: None,
             error: Some("That doesn't look like an email address."),
         });
@@ -367,6 +400,7 @@ async fn public_subscribe_post(
     if let Ok(Some(_)) = state.db.get_subscriber_by_email(&email) {
         // Already subscribed: silently treat as success to avoid email enumeration.
         return render(PublicSubscribePage {
+            site_name: state.site_name.as_ref().clone(),
             success: Some(true),
             error: None,
         });
@@ -380,11 +414,13 @@ async fn public_subscribe_post(
     };
     if let Err(e) = state.db.upsert_subscriber(&sub) {
         return render(PublicSubscribePage {
+            site_name: state.site_name.as_ref().clone(),
             success: None,
             error: Some(&format!("Could not subscribe: {}", e)),
         });
     }
     render(PublicSubscribePage {
+        site_name: state.site_name.as_ref().clone(),
         success: Some(true),
         error: None,
     })
@@ -398,6 +434,9 @@ async fn public_subscribe_post(
 struct AdminState {
     db: Arc<CccDB>,
     settings: Arc<SettingsStore>,
+    /// Operator-configured site name; substituted for the untouched
+    /// `from_name` default at send time (see `effective_from_name`).
+    site_name: Arc<String>,
 }
 
 #[derive(Template)]
@@ -503,7 +542,11 @@ async fn admin_send(State(state): State<AdminState>, Form(form): Form<ComposeFor
         }
     };
 
-    let from = format!("{} <{}>", snap.from_name, snap.from_email);
+    let from = format!(
+        "{} <{}>",
+        effective_from_name(&snap.from_name, &state.site_name),
+        snap.from_email
+    );
     let mut sent = 0usize;
     let mut errors: Vec<String> = Vec::new();
 
@@ -576,6 +619,23 @@ fn load_rows(db: &CccDB) -> Vec<SubscriberRow> {
             created_human: format_unix_utc(s.created_at),
         })
         .collect()
+}
+
+/// Resolve the email sender name.
+///
+/// The sidecar's serde `Default` hard-codes `from_name = "Nuntius"` (the
+/// platform name) because it cannot see `ccc.toml`. If the stored value
+/// is still that untouched default, substitute the operator-configured
+/// `[site] name` at send time. The override is purely in-memory — it is
+/// never written back to `newsletter.toml` — so anything the operator
+/// saves in the admin settings UI (i.e. any value other than the literal
+/// default) always wins.
+fn effective_from_name<'a>(stored: &'a str, site_name: &'a str) -> &'a str {
+    if stored == "Nuntius" {
+        site_name
+    } else {
+        stored
+    }
 }
 
 fn build_mailer(s: &NewsletterSettings) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
@@ -656,3 +716,49 @@ async fn admin_settings_post(
 // ============================================================================
 // render / unix_now / format_unix_utc (the `YYYY-MM-DD HH:MM UTC` shape
 // the subscriber list has always shown) all live in ccc-plugin-utils.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn untouched_from_name_default_yields_the_site_name() {
+        // Stored value is the untouched serde default -> site name wins.
+        assert_eq!(
+            effective_from_name("Nuntius", "Radio Free Harbor"),
+            "Radio Free Harbor"
+        );
+        // Operator customized the sender name in the admin UI -> it wins.
+        assert_eq!(
+            effective_from_name("The Harbor Desk", "Radio Free Harbor"),
+            "The Harbor Desk"
+        );
+        // Default deployment (site name left as "Nuntius") is a no-op.
+        assert_eq!(effective_from_name("Nuntius", "Nuntius"), "Nuntius");
+    }
+
+    #[test]
+    fn subscribe_page_renders_the_configured_site_name() {
+        let html = PublicSubscribePage {
+            site_name: "Radio Free Harbor".into(),
+            success: None,
+            error: None,
+        }
+        .render()
+        .unwrap();
+        assert!(
+            html.contains("<title>Subscribe — Radio Free Harbor</title>"),
+            "title should carry the site name: {html}"
+        );
+        assert!(
+            html.contains("Subscribe to the Radio Free Harbor newsletter."),
+            "meta description should carry the site name: {html}"
+        );
+        assert!(
+            html.contains(">Radio Free Harbor</a>"),
+            "brand link should carry the site name: {html}"
+        );
+        // Platform attribution is deliberate and must stay.
+        assert!(html.contains("Powered by Nuntius"));
+    }
+}

@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Podcasts - Nuntius</title>
-  <meta name="description" content="On-demand audio from Nuntius. Listen here or subscribe with the RSS feed.">
+  <title>Podcasts - {{ site_name }}</title>
+  <meta name="description" content="On-demand audio from {{ site_name }}. Listen here or subscribe with the RSS feed.">
   <meta name="theme-color" content="#07090d">
-  <meta property="og:title" content="Podcasts - Nuntius">
+  <meta property="og:title" content="Podcasts - {{ site_name }}">
   <meta property="og:type" content="website">
-  <meta property="og:description" content="On-demand audio from Nuntius. Listen here or subscribe with the RSS feed.">
+  <meta property="og:description" content="On-demand audio from {{ site_name }}. Listen here or subscribe with the RSS feed.">
   <meta name="twitter:card" content="summary">
-  <link rel="alternate" type="application/rss+xml" title="Nuntius Podcast" href="/podcasts/feed.xml">
+  <link rel="alternate" type="application/rss+xml" title="{{ site_name }} Podcast" href="/podcasts/feed.xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
@@ -35,7 +35,7 @@
 <body class="nuntius-public">
   <div class="pub-wrap">
     <header class="pub-top">
-      <a class="pub-brand" href="/">Nuntius</a>
+      <a class="pub-brand" href="/">{{ site_name }}</a>
       <nav class="pub-nav" aria-label="Site">
         <a href="/radio">Live radio</a>
         <a href="/podcasts" aria-current="page">Podcasts</a>
@@ -48,7 +48,7 @@
       <div class="page-head">
         <span class="pub-kicker">On demand</span>
         <h1>Podcasts</h1>
-        <p class="lede">On-demand audio from Nuntius. Listen here or subscribe with the RSS feed.</p>
+        <p class="lede">On-demand audio from {{ site_name }}. Listen here or subscribe with the RSS feed.</p>
       </div>
 
       <section class="pub-section" aria-label="Published episodes">
