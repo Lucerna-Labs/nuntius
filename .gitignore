@@ -21,6 +21,10 @@ radio.toml
 cargo-check.log
 cargo-clippy.log
 
+# Local launcher shortcut + icon (absolute paths, machine-specific)
+*.lnk
+nuntius-launcher.ico
+
 # Editor / IDE
 .idea/
 .vscode/
