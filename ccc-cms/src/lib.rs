@@ -58,9 +58,19 @@ impl CmsPlugin {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("admin.toml"));
 
-        let store = AdminStore::load_or_init(&admin_store_path).map_err(|e| {
+        let mut store = AdminStore::load_or_init(&admin_store_path).map_err(|e| {
             PluginError::InitError(format!("CMS: failed to load admin store: {}", e))
         })?;
+
+        // Opt-out switch for the login gate. For machines nothing else
+        // can reach; a public instance with this on hands the console —
+        // library, settings, every plugin — to anyone with the URL.
+        store.auth_disabled = cfg
+            .plugin
+            .get("cms")
+            .and_then(|t| t.get("disable_auth"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let cookie_key = store.cookie_key.clone();
 
@@ -120,6 +130,13 @@ impl Plugin for CmsPlugin {
             self.admin_store_path.display(),
             setup_state
         );
+        if self.store.auth_disabled {
+            eprintln!(
+                "[cms] WARNING: admin login is DISABLED (disable_auth = true in ccc.toml). \
+                 Anyone who can reach this server owns the console. \
+                 Remove the flag before exposing it to a network."
+            );
+        }
         Ok(())
     }
 

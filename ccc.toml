@@ -44,6 +44,10 @@ enabled = [
 # Created automatically on first run; the setup wizard at /admin/setup
 # writes the admin account into it.
 admin_store_path = "admin.toml"
+# No login required for /admin. ONLY safe while this machine is the only
+# thing that can reach the server — REMOVE THIS LINE before putting the
+# station on the internet, or anyone with the URL controls everything.
+disable_auth = true
 
 [plugin.podcast]
 # Where uploaded audio files are saved.

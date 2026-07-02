@@ -617,17 +617,15 @@ impl Plugin for RadioEnginePlugin {
     fn id(&self) -> String {
         // Use the same identifier as the dispatch table in cli/src/registry.rs
         // and the slug operators put in `ccc.toml`. The admin URL mirrors
-        // this via `admin_routes()` nesting at `/admin/{id}`.
+        // The admin surface itself is merged at `/admin/radio`.
         "radio-engine".into()
     }
 
-    /// The plugin's admin landing page. The framework nests the routes
-    /// returned by `admin_routes()` under `/admin/{id}`, so `/radio` here
-    /// gives us the final URL `/admin/radio-engine/radio` — the dashboard.
-    /// Override keeps the radio engine's index page reachable via the
-    /// canonical id-based path.
+    /// The plugin's admin landing page. The CMS MERGES (not nests) each
+    /// plugin's `admin_routes()` into the `/admin` tree, so `/radio`
+    /// here lands at `/admin/radio` — the studio dashboard.
     fn admin_url(&self) -> String {
-        "/admin/radio-engine/radio".into()
+        "/admin/radio".into()
     }
     fn kind(&self) -> &'static str {
         "BROADCAST"
@@ -806,7 +804,7 @@ impl Plugin for RadioEnginePlugin {
     fn admin_nav(&self, _ctx: &AppContext) -> Vec<AdminNavEntry> {
         vec![AdminNavEntry {
             label: "Radio",
-            href: "/admin/radio-engine/radio".into(),
+            href: "/admin/radio".into(),
             icon: "📻",
             sort: 1000,
         }]
@@ -1368,7 +1366,7 @@ async fn admin_post(
         form.hls_dir.trim().to_string()
     };
     let _ = state.settings.replace(snap);
-    Redirect::to("/admin/radio-engine/radio/engineering?saved=1").into_response()
+    Redirect::to("/admin/radio/engineering?saved=1").into_response()
 }
 
 /// Parse a comma- or whitespace-separated list of track IDs.
@@ -3219,26 +3217,26 @@ async fn admin_record_start(State(state): State<Arc<EngineState>>) -> Response {
         started_at: now,
     });
     println!("[radio-engine] recording started -> {}", path.display());
-    Redirect::to("/admin/radio-engine/radio").into_response()
+    Redirect::to("/admin/radio").into_response()
 }
 
 async fn admin_record_stop(State(state): State<Arc<EngineState>>) -> Response {
     *state.recording.write().expect("recording poisoned") = None;
     println!("[radio-engine] recording stopped");
-    Redirect::to("/admin/radio-engine/radio").into_response()
+    Redirect::to("/admin/radio").into_response()
 }
 
 async fn admin_autodj_pause(State(state): State<Arc<EngineState>>) -> Response {
     state.autodj_paused.store(true, Ordering::SeqCst);
     *state.now_playing.write().expect("np poisoned") = None;
     println!("[radio-engine] AutoDJ paused");
-    Redirect::to("/admin/radio-engine/radio").into_response()
+    Redirect::to("/admin/radio").into_response()
 }
 
 async fn admin_autodj_resume(State(state): State<Arc<EngineState>>) -> Response {
     state.autodj_paused.store(false, Ordering::SeqCst);
     println!("[radio-engine] AutoDJ resumed");
-    Redirect::to("/admin/radio-engine/radio").into_response()
+    Redirect::to("/admin/radio").into_response()
 }
 
 /// Drop the currently-configured remote-presenter URL so the ingest
@@ -3252,7 +3250,7 @@ async fn admin_presenter_stop(State(state): State<Arc<EngineState>>) -> Response
     let _ = state.settings.replace(snap);
     state.presenter_alive.store(false, Ordering::SeqCst);
     println!("[radio-engine] remote presenter stopped by operator");
-    Redirect::to("/admin/radio-engine/radio/engineering?saved=1").into_response()
+    Redirect::to("/admin/radio/engineering?saved=1").into_response()
 }
 
 pub(crate) fn push_history(state: &EngineState, entry: NowPlaying) {

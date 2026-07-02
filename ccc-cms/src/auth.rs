@@ -50,6 +50,12 @@ pub struct AdminStore {
     inner: RwLock<Inner>,
     /// Raw cookie-signing bytes. Stable for the process lifetime.
     pub cookie_key: Vec<u8>,
+    /// When true, the login gate is switched off entirely — every
+    /// /admin/* request passes through with no session. Set from
+    /// `disable_auth = true` under `[plugin.cms]` in ccc.toml, NOT
+    /// persisted in admin.toml. Only sane for a machine that nothing
+    /// else can reach; never run a public instance this way.
+    pub auth_disabled: bool,
 }
 
 struct Inner {
@@ -74,6 +80,7 @@ impl AdminStore {
             path: path.to_path_buf(),
             inner: RwLock::new(Inner { admin }),
             cookie_key,
+            auth_disabled: false,
         };
         // Persist if we just generated the key (file didn't exist).
         if !path.exists() {

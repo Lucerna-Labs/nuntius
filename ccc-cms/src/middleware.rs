@@ -71,6 +71,12 @@ pub async fn require_login(
     req: Request<Body>,
     next: Next,
 ) -> Response {
+    // Operator explicitly switched the gate off in ccc.toml
+    // ([plugin.cms] disable_auth = true). Everything passes.
+    if store.auth_disabled {
+        return next.run(req).await;
+    }
+
     // This layer sits on the router that gets nested under `/admin`, so
     // axum has already stripped that prefix from the URI it sees here.
     // Strip defensively anyway in case the tree is ever mounted un-nested.

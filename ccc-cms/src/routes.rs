@@ -152,6 +152,10 @@ pub struct LoginForm {
 }
 
 async fn login_get(State(ctx): State<DashboardCtx>, cookies: Cookies) -> Response {
+    // Auth switched off — the form is pointless, go straight in.
+    if ctx.store.auth_disabled {
+        return Redirect::to("/admin/").into_response();
+    }
     if !ctx.store.is_initialized() {
         return Redirect::to("/admin/setup").into_response();
     }
