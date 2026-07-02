@@ -249,6 +249,22 @@
   </section>
 
   <section class="panel history-panel">
+    <h3>Listeners — last 3 hours{% if peak_24h > 0 %} · 24h peak {{ peak_24h }}{% endif %}</h3>
+    {% if !spark_points.is_empty() %}
+    <div style="display:flex; align-items:center; gap:14px;">
+      <svg viewBox="0 0 260 48" preserveAspectRatio="none"
+           style="flex:1; height:48px; background:#0a0b0e; border:1px solid #1a1d24; border-radius:4px;">
+        <polyline points="{{ spark_points }}" fill="none" stroke="#5be0ff" stroke-width="1.5"
+                  vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+      </svg>
+      <span style="font:700 20px 'Consolas',monospace; color:#5be0ff;">{{ spark_peak }}</span>
+    </div>
+    {% else %}
+    <p style="margin:0; font-size:13px; color:var(--ink-dim);">Collecting data — the engine records one peak-listener sample per minute.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel history-panel">
     <h3>Recently played</h3>
     <ul class="history-list" id="historyList">
       <li><span class="h__when">—</span><span class="h__what"><em>history will appear here as tracks air</em></span></li>
@@ -297,7 +313,9 @@
     if (started) return;
     started = true;
     audioEl = document.getElementById('streamAudio');
-    audioEl.src = "http://" + window.location.hostname + ":" + STREAM_PORT + STREAM_MOUNT;
+    // Same-origin stream on the API port — works behind HTTPS proxies
+    // and needs no CORS handshake for the analyser.
+    audioEl.src = "/radio/stream";
     audioEl.crossOrigin = "anonymous";
     audioEl.muted = true;
     audioEl.play().catch(() => {});

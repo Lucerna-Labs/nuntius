@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
-use crate::{EngineState, NowPlaying, RecordingHandle};
+use crate::{EngineState, NowPlaying, RecordingHandle, UpNext};
 
 /// What gets pushed on the wire. One of two variants:
 /// - `Snapshot` on connect (so new clients render immediately)
@@ -53,6 +53,8 @@ pub enum NowPlayingEvent {
         stream_name: String,
         mount_path: String,
         radio_port: u16,
+        up_next: Option<UpNext>,
+        active_playlist: Option<String>,
         ts: u64,
     },
     Update {
@@ -61,6 +63,8 @@ pub enum NowPlayingEvent {
         relay: bool,
         autodj_paused: bool,
         listeners: usize,
+        up_next: Option<UpNext>,
+        active_playlist: Option<String>,
         ts: u64,
     },
     #[allow(dead_code)]
@@ -103,6 +107,8 @@ impl NowPlayingEvent {
             stream_name: s.stream_name,
             mount_path: s.mount_path,
             radio_port: s.port,
+            up_next: crate::compute_up_next(state),
+            active_playlist: crate::active_playlist_name(state),
             ts: unix_now(),
         }
     }
@@ -120,6 +126,8 @@ impl NowPlayingEvent {
             listeners: state
                 .listener_count
                 .load(std::sync::atomic::Ordering::SeqCst),
+            up_next: crate::compute_up_next(state),
+            active_playlist: crate::active_playlist_name(state),
             ts: unix_now(),
         }
     }
@@ -138,6 +146,8 @@ pub fn build_update_event(state: &EngineState, new_np: Option<NowPlaying>) -> No
         relay: false,
         autodj_paused: false,
         listeners: 0,
+        up_next: None,
+        active_playlist: None,
         ts: unix_now(),
     }
 }
@@ -284,6 +294,8 @@ impl NowPlayingEvent {
             listeners: state
                 .listener_count
                 .load(std::sync::atomic::Ordering::SeqCst),
+            up_next: crate::compute_up_next(state),
+            active_playlist: crate::active_playlist_name(state),
             ts: unix_now(),
         }
     }
@@ -317,6 +329,8 @@ mod tests {
             stream_name: "Test".into(),
             mount_path: "/listen.mp3".into(),
             radio_port: 8000,
+            up_next: None,
+            active_playlist: None,
             ts: 0,
         };
         let json = serde_json::to_string(&ev).unwrap();

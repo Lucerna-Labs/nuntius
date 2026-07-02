@@ -182,6 +182,18 @@ pub struct RadioSettings {
     /// `clock_items` are ignored. Default true.
     #[serde(default = "default_clock_enabled")]
     pub clock_enabled: bool,
+    /// Master switch for the HLS output pipeline. When true, a
+    /// background task runs an ffmpeg transcoder fed from the master
+    /// broadcast that writes rolling AAC/MPEG-TS segments plus a
+    /// `live.m3u8` playlist into `hls_dir`. Served publicly at
+    /// `/radio/hls/live.m3u8`. Default false.
+    #[serde(default)]
+    pub enable_hls: bool,
+    /// Directory the HLS transcoder writes segments + playlist into.
+    /// Created on pipeline start; stale segments from a previous run
+    /// are removed before ffmpeg starts.
+    #[serde(default = "default_hls_dir")]
+    pub hls_dir: String,
 }
 
 /// One configured clock item. The operator populates a list of these
@@ -264,6 +276,10 @@ fn default_library_dir() -> String {
     "./media/radio-library".into()
 }
 
+fn default_hls_dir() -> String {
+    "./media/radio-hls".into()
+}
+
 impl Default for RadioSettings {
     fn default() -> Self {
         Self {
@@ -290,6 +306,8 @@ impl Default for RadioSettings {
             clock_items: Vec::new(),
             clock_lookahead_seconds: default_clock_lookahead_seconds(),
             clock_enabled: default_clock_enabled(),
+            enable_hls: false,
+            hls_dir: default_hls_dir(),
         }
     }
 }
@@ -681,15 +699,10 @@ impl Plugin for RadioEnginePlugin {
             "Initializing Radio Engine on TCP {} (mount {})",
             snap.port, snap.mount_path
         );
-        // Spawn the engine. Engine error => we log and exit the task; the
-        // host stays up.
-        let st = self.state.clone();
-        let shutdown = self.shutdown.clone();
-        tokio::spawn(async move {
-            if let Err(e) = run_engine(st, shutdown).await {
-                eprintln!("[radio-engine] terminated: {}", e);
-            }
-        });
+        // The TCP engine itself is spawned from routes() — init has no
+        // AppContext, and the engine needs the DB handle so the
+        // now-playing events it emits (live source connect/disconnect)
+        // carry up-next and playlist data.
         Ok(())
     }
 
@@ -701,11 +714,23 @@ impl Plugin for RadioEnginePlugin {
             ..self.state.clone()
         };
         let st_arc = Arc::new(st);
+        // Spawn the TCP engine exactly once, with the db-injected state.
+        // routes() is called for every enabled plugin when the router is
+        // built, so this runs at boot even when the admin shell is
+        // disabled. Engine error => log and exit the task; host stays up.
+        let engine_shutdown = self.shutdown.clone();
+        st_arc.spawn_once("tcp_engine", move |st| async move {
+            if let Err(e) = run_engine(st, engine_shutdown).await {
+                eprintln!("[radio-engine] terminated: {}", e);
+            }
+        });
         Some(
             Router::new()
                 .route("/", get(public_home))
                 .route("/radio", get(public_listen))
                 .route("/radio/stream", get(public_stream))
+                .route("/radio/hls/live.m3u8", get(public_hls_playlist))
+                .route("/radio/hls/:segment", get(public_hls_segment))
                 .route("/radio/manifest.webmanifest", get(public_manifest))
                 .route("/radio/icon.svg", get(public_icon))
                 .route("/api/radio/nowplaying", get(public_now_playing))
@@ -719,16 +744,10 @@ impl Plugin for RadioEnginePlugin {
     }
 
     fn admin_routes(&self, ctx: &AppContext) -> Option<Router> {
-        // Inject the live DB handle and spawn AutoDJ on first call.
-        // We do this here (not in init) because init has no ctx.
-        {
-            // SAFETY: only this Arc holds the db; we create it once at boot.
-            // We can't mutate `self.state.db` (it's behind an Arc), so we
-            // build a fresh state with the db filled in for the routes
-            // returned here. The TCP server task uses the cloned state we
-            // already spawned in init() — that one stays db-less, which
-            // is fine: the engine's TCP loop doesn't need DB access.
-        }
+        // Inject the live DB handle and spawn the background workers on
+        // first call. We do this here (not in init) because init has no
+        // ctx. The TCP engine itself is spawned from routes() with its
+        // own db-injected state, for the same reason.
         let st = EngineState {
             db: Some(ctx.db.clone()),
             ..self.state.clone()
@@ -741,6 +760,8 @@ impl Plugin for RadioEnginePlugin {
         spawn_remote_presenter((*st_arc).clone(), shutdown.clone());
         spawn_clock_tick((*st_arc).clone(), shutdown.clone());
         spawn_variant_transcoders((*st_arc).clone(), shutdown.clone());
+        spawn_hls((*st_arc).clone(), shutdown.clone());
+        spawn_listener_sampler((*st_arc).clone(), shutdown.clone());
         Some(
             Router::new()
                 .route("/radio", get(admin_get).post(admin_post))
@@ -1126,6 +1147,11 @@ struct AdminDashboardPage {
     track_count: usize,
     recording_path: Option<String>,
     autodj_paused: bool,
+    /// SVG polyline points for the last-3-hours listener sparkline.
+    /// Empty until the sampler has recorded at least two minutes.
+    spark_points: String,
+    spark_peak: u32,
+    peak_24h: u32,
 }
 
 async fn admin_get(State(state): State<Arc<EngineState>>) -> Response {
@@ -1142,6 +1168,30 @@ async fn admin_get(State(state): State<Arc<EngineState>>) -> Response {
         .expect("recording poisoned")
         .as_ref()
         .map(|h| h.path.clone());
+
+    let now = unix_now();
+    let spark_from = now.saturating_sub(3 * 3600);
+    let samples = state
+        .db
+        .as_ref()
+        .and_then(|db| db.listener_samples(spark_from, now).ok())
+        .unwrap_or_default();
+    let spark_peak = samples.iter().map(|(_, n)| *n).max().unwrap_or(0);
+    let spark_points = if samples.len() >= 2 {
+        sparkline_points(&samples, spark_from, now, 260.0, 48.0)
+    } else {
+        String::new()
+    };
+    let peak_24h = state
+        .db
+        .as_ref()
+        .and_then(|db| db.listener_samples(now.saturating_sub(86_400), now).ok())
+        .unwrap_or_default()
+        .iter()
+        .map(|(_, n)| *n)
+        .max()
+        .unwrap_or(0);
+
     render(AdminDashboardPage {
         active_tab: "studio",
         port: snap.port,
@@ -1149,6 +1199,9 @@ async fn admin_get(State(state): State<Arc<EngineState>>) -> Response {
         track_count,
         recording_path,
         autodj_paused: state.autodj_paused.load(Ordering::SeqCst),
+        spark_points,
+        spark_peak,
+        peak_24h,
     })
 }
 
@@ -1174,6 +1227,8 @@ struct AdminEngineeringPage {
     max_artist_in_window: u32,
     max_album_in_window: u32,
     cap_window_hours: u64,
+    enable_hls: bool,
+    hls_dir: String,
     saved: bool,
 }
 
@@ -1214,6 +1269,8 @@ async fn admin_engineering_get(
         max_artist_in_window: snap.max_artist_in_window,
         max_album_in_window: snap.max_album_in_window,
         cap_window_hours: snap.cap_window_hours,
+        enable_hls: snap.enable_hls,
+        hls_dir: snap.hls_dir,
         saved: q.saved.is_some(),
     })
 }
@@ -1250,6 +1307,10 @@ struct SettingsForm {
     max_album_in_window: Option<u32>,
     #[serde(default)]
     cap_window_hours: Option<u64>,
+    #[serde(default)]
+    enable_hls: Option<String>,
+    #[serde(default)]
+    hls_dir: String,
 }
 
 async fn admin_post(
@@ -1300,6 +1361,12 @@ async fn admin_post(
     if let Some(m) = form.cap_window_hours {
         snap.cap_window_hours = m.clamp(1, 24);
     }
+    snap.enable_hls = form.enable_hls.is_some();
+    snap.hls_dir = if form.hls_dir.trim().is_empty() {
+        default_hls_dir()
+    } else {
+        form.hls_dir.trim().to_string()
+    };
     let _ = state.settings.replace(snap);
     Redirect::to("/admin/radio-engine/radio/engineering?saved=1").into_response()
 }
@@ -1380,6 +1447,8 @@ async fn public_now_playing(State(state): State<Arc<EngineState>>) -> Response {
         "stream_name": s.stream_name,
         "mount_path": s.mount_path,
         "radio_port": s.port,
+        "up_next": compute_up_next(&state),
+        "active_playlist": active_playlist_name(&state),
         "now_unix": unix_now(),
     }))
     .into_response()
@@ -2247,6 +2316,250 @@ async fn run_variant_transcoder(
 }
 
 // ============================================================================
+// HLS output — an ffmpeg transcoder fed from the master broadcast that
+// writes rolling AAC/MPEG-TS segments + a live.m3u8 playlist to disk.
+// The public routes serve those files; players (Safari, hls.js, most
+// smart-TV stacks) pull the playlist and segments over plain HTTP.
+// Enabled/disabled live via the engineering page — the loop polls the
+// settings snapshot like the relay does.
+// ============================================================================
+
+fn spawn_hls(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    state.spawn_once("hls", move |st| async move {
+        hls_loop(st, shutdown).await;
+    });
+}
+
+async fn hls_loop(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    loop {
+        if shutdown.is_cancelled() {
+            break;
+        }
+        let snap = state.settings.snapshot();
+        if !snap.enable_hls {
+            // Disabled — idle until the operator flips the switch.
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+            }
+            continue;
+        }
+        match hls_once(&state, &snap, &shutdown).await {
+            Ok(()) => {
+                // Clean stop — settings changed, receiver lagged/closed,
+                // or shutdown. Brief back-off, then re-check settings.
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                }
+            }
+            Err(e) => {
+                eprintln!("[radio-engine] HLS pipeline error: {}", e);
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(10)) => {}
+                }
+            }
+        }
+    }
+}
+
+/// One full ffmpeg run. Prepares `hls_dir`, spawns the transcoder with
+/// stdin piped, and pumps the master broadcast into it (mirroring
+/// `run_variant_transcoder`'s stdin pump). Returns `Ok(())` for clean
+/// stops the caller should quietly respawn from (settings changed,
+/// lagged/closed receiver, shutdown) and `Err` for real failures
+/// (ffmpeg missing, ffmpeg died) that deserve the longer back-off.
+async fn hls_once(
+    state: &EngineState,
+    snap: &RadioSettings,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> Result<(), String> {
+    use std::process::Stdio;
+    use tokio::process::Command;
+
+    let dir = PathBuf::from(&snap.hls_dir);
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("create {}: {}", dir.display(), e))?;
+
+    // Remove stale segments + playlist from a previous run so players
+    // never see a playlist referencing segments that no longer exist.
+    if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "live.m3u8" || is_safe_segment_name(&name) {
+                let _ = tokio::fs::remove_file(entry.path()).await;
+            }
+        }
+    }
+
+    let mut child = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-f")
+        .arg("mp3")
+        .arg("-i")
+        .arg("pipe:0")
+        .arg("-c:a")
+        .arg("aac")
+        .arg("-b:a")
+        .arg(format!("{}k", snap.station_bitrate_kbps))
+        .arg("-f")
+        .arg("hls")
+        .arg("-hls_time")
+        .arg("4")
+        .arg("-hls_list_size")
+        .arg("6")
+        .arg("-hls_flags")
+        .arg("delete_segments+append_list+omit_endlist")
+        .arg("-hls_segment_filename")
+        .arg(dir.join("seg_%05d.ts"))
+        .arg(dir.join("live.m3u8"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("ffmpeg spawn failed: {}", e))?;
+
+    let mut stdin = match child.stdin.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill().await;
+            return Err("ffmpeg had no stdin".into());
+        }
+    };
+    let mut rx = state.tx.subscribe();
+    println!(
+        "[radio-engine] HLS pipeline started -> {}",
+        dir.join("live.m3u8").display()
+    );
+
+    // Periodic housekeeping: notice a dead ffmpeg during dead air (no
+    // broadcast bytes means no write errors to trip on) and notice the
+    // operator disabling HLS or repointing the directory/bitrate.
+    let mut check = tokio::time::interval(Duration::from_secs(2));
+    check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    check.reset(); // don't run housekeeping on the very first tick
+
+    let mut exit: Result<(), String> = Ok(());
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            recv = rx.recv() => match recv {
+                Ok(chunk) => {
+                    if stdin.write_all(&chunk).await.is_err() {
+                        // Broken pipe — ffmpeg died underneath us.
+                        exit = Err("ffmpeg stdin closed".into());
+                        break;
+                    }
+                }
+                // Lagged: we fell behind the broadcast ring and would
+                // splice mid-frame garbage into a segment. Kill and
+                // respawn on a fresh subscription instead.
+                Err(broadcast::error::RecvError::Lagged(_)) => break,
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            _ = check.tick() => {
+                let cur = state.settings.snapshot();
+                if !cur.enable_hls
+                    || cur.hls_dir != snap.hls_dir
+                    || cur.station_bitrate_kbps != snap.station_bitrate_kbps
+                {
+                    break;
+                }
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        exit = Err(format!("ffmpeg exited: {}", status));
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        exit = Err(format!("ffmpeg wait: {}", e));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Close the pipe first so ffmpeg isn't blocked reading stdin, then
+    // make sure the process is gone before we return (the next run
+    // deletes and rewrites the same files).
+    drop(stdin);
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    println!("[radio-engine] HLS pipeline stopped");
+    exit
+}
+
+/// Path-traversal guard for the public segment route. Accepts exactly
+/// the filenames our ffmpeg invocation produces — `seg_<digits>.ts` —
+/// and nothing else. Never join un-sanitized request input into a
+/// filesystem path without passing it through this first.
+pub fn is_safe_segment_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("seg_") else {
+        return false;
+    };
+    let Some(digits) = rest.strip_suffix(".ts") else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// GET /radio/hls/live.m3u8 — the rolling playlist. 404 while the
+/// pipeline is disabled or hasn't produced a playlist yet. Never
+/// cached: the whole point of the file is that it changes every
+/// few seconds.
+async fn public_hls_playlist(State(state): State<Arc<EngineState>>) -> Response {
+    let snap = state.settings.snapshot();
+    if !snap.enable_hls {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let path = PathBuf::from(&snap.hls_dir).join("live.m3u8");
+    match tokio::fs::read(&path).await {
+        Ok(body) => Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/vnd.apple.mpegurl")
+            .header("Cache-Control", "no-store")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(axum::body::Body::from(body))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// GET /radio/hls/:segment — one MPEG-TS segment. The filename is
+/// validated against `is_safe_segment_name` BEFORE it touches the
+/// filesystem; anything else (traversal, other extensions, stray
+/// separators) is a plain 404. Segment names are NOT immutable —
+/// every pipeline restart wipes the directory and ffmpeg renumbers
+/// from seg_00000.ts, so the same URL can carry different bytes
+/// across restarts. No caching.
+async fn public_hls_segment(
+    State(state): State<Arc<EngineState>>,
+    axum::extract::Path(segment): axum::extract::Path<String>,
+) -> Response {
+    let snap = state.settings.snapshot();
+    if !snap.enable_hls || !is_safe_segment_name(&segment) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let path = PathBuf::from(&snap.hls_dir).join(&segment);
+    match tokio::fs::read(&path).await {
+        Ok(body) => Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "video/mp2t")
+            .header("Cache-Control", "no-store")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(axum::body::Body::from(body))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+// ============================================================================
 // Stream relay — pulls an upstream Icecast/SHOUTcast URL and pumps the
 // bytes into our broadcast channel. Live source connections preempt it.
 // ============================================================================
@@ -2673,6 +2986,78 @@ pub fn next_due_clock_item(
     candidates.first().map(|i| (*i).clone())
 }
 
+/// What the schedule says is coming up. Shown on the public player
+/// ("Up next · 14:30 — Station ID") and pushed over SSE/WS.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpNext {
+    pub label: String,
+    /// Title of the library track the item plays, when resolvable.
+    pub track_title: String,
+    /// Unix timestamp the item is scheduled to fire.
+    pub fires_at: u64,
+}
+
+/// The soonest clock item within the next 60 minutes, with its fire
+/// time. Day-of-week masks are evaluated at the FIRE time, so an item
+/// scheduled for :05 shown at 23:50 on a Sunday respects Monday's
+/// mask. Pure function for easy testing.
+pub fn upcoming_clock_item(items: &[ClockItemSetting], now: u64) -> Option<(ClockItemSetting, u64)> {
+    let mut best: Option<(ClockItemSetting, u64)> = None;
+    for item in items {
+        if item.minute_of_hour as u64 >= 60 {
+            continue;
+        }
+        let hour_start = now - now % 3600;
+        let mut fires = hour_start + (item.minute_of_hour as u64) * 60;
+        if fires <= now {
+            fires += 3600;
+        }
+        let weekday_bit = match weekday_from_unix(fires) {
+            Some(w) => 1u8 << w,
+            None => continue,
+        };
+        if item.days_of_week_mask & weekday_bit == 0 {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(_, b)| fires < *b) {
+            best = Some((item.clone(), fires));
+        }
+    }
+    best
+}
+
+/// Build the public "up next" readout from the live settings + library.
+pub(crate) fn compute_up_next(state: &EngineState) -> Option<UpNext> {
+    let snap = state.settings.snapshot();
+    if !snap.clock_enabled || snap.clock_items.is_empty() {
+        return None;
+    }
+    let (item, fires_at) = upcoming_clock_item(&snap.clock_items, unix_now())?;
+    let track_title = state
+        .db
+        .as_ref()
+        .and_then(|db| db.get_track(item.track_id).ok().flatten())
+        .map(|t| t.title)
+        .unwrap_or_default();
+    let label = if item.label.is_empty() {
+        "Scheduled item".to_string()
+    } else {
+        item.label
+    };
+    Some(UpNext {
+        label,
+        track_title,
+        fires_at,
+    })
+}
+
+/// Name of the playlist the AutoDJ is currently drawing from, if a
+/// schedule window matches right now.
+pub(crate) fn active_playlist_name(state: &EngineState) -> Option<String> {
+    let db = state.db.as_ref()?;
+    playlists::pick_active_playlist(db).map(|p| p.name)
+}
+
 /// Convert a Unix timestamp to a day-of-week bit position.
 /// Returns 0=Sunday, 1=Monday, ..., 6=Saturday (matches Unix
 /// convention). Pure function for easy testing.
@@ -2693,6 +3078,67 @@ fn spawn_recorder(state: EngineState, shutdown: tokio_util::sync::CancellationTo
     state.spawn_once("recorder", move |st| async move {
         recorder_loop(st, shutdown).await;
     });
+}
+
+// ============================================================================
+// Listener sampler — one peak-per-minute data point for the admin
+// sparkline and long-term "when are my peak hours" questions.
+// ============================================================================
+
+/// Keep a week of per-minute samples; prune hourly.
+const LISTENER_SAMPLE_RETENTION_SECS: u64 = 7 * 86_400;
+
+fn spawn_listener_sampler(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    state.spawn_once("listener_sampler", move |st| async move {
+        listener_sampler_loop(st, shutdown).await;
+    });
+}
+
+async fn listener_sampler_loop(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
+    let db = match state.db.clone() {
+        Some(db) => db,
+        None => return,
+    };
+    let mut tick = tokio::time::interval(Duration::from_secs(60));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut ticks_since_prune: u32 = 0;
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => return,
+            _ = tick.tick() => {}
+        }
+        let listeners = state.listener_count.load(Ordering::SeqCst) as u32;
+        if let Err(e) = db.record_listener_sample(unix_now(), listeners) {
+            eprintln!("[radio-engine] listener sample write failed: {}", e);
+        }
+        ticks_since_prune += 1;
+        if ticks_since_prune >= 60 {
+            ticks_since_prune = 0;
+            let cutoff = unix_now().saturating_sub(LISTENER_SAMPLE_RETENTION_SECS);
+            let _ = db.prune_listener_samples(cutoff);
+        }
+    }
+}
+
+/// Map (minute, listeners) samples onto an SVG polyline points string
+/// for a `w`×`h` viewBox. Pure function for easy testing.
+fn sparkline_points(samples: &[(u64, u32)], from: u64, to: u64, w: f32, h: f32) -> String {
+    if samples.is_empty() || to <= from {
+        return String::new();
+    }
+    let max_n = samples.iter().map(|(_, n)| *n).max().unwrap_or(0).max(1) as f32;
+    let span = (to - from) as f32;
+    let mut out = String::with_capacity(samples.len() * 12);
+    for (ts, n) in samples {
+        let x = ((ts.saturating_sub(from)) as f32 / span * w).clamp(0.0, w);
+        // 2px padding top and bottom so the line never clips the box.
+        let y = h - 2.0 - (*n as f32 / max_n) * (h - 4.0);
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&format!("{:.1},{:.1}", x, y));
+    }
+    out
 }
 
 async fn recorder_loop(state: EngineState, shutdown: tokio_util::sync::CancellationToken) {
@@ -3105,6 +3551,48 @@ mod tests {
     }
 
     #[test]
+    fn upcoming_clock_item_picks_soonest_and_wraps_hour() {
+        let item = |minute: u8, label: &str| ClockItemSetting {
+            minute_of_hour: minute,
+            track_id: 1,
+            days_of_week_mask: 0x7F,
+            label: label.into(),
+            hard_cut: true,
+        };
+        // 1970-01-01 00:10:00 UTC (a Thursday).
+        let now = 600;
+        let items = vec![item(30, "half"), item(5, "five"), item(45, "q3")];
+        let (got, fires) = upcoming_clock_item(&items, now).unwrap();
+        assert_eq!(got.label, "half");
+        assert_eq!(fires, 1800);
+        // :05 already passed this hour → it fires next hour (wrap).
+        let (got, fires) = upcoming_clock_item(&[item(5, "five")], now).unwrap();
+        assert_eq!(got.label, "five");
+        assert_eq!(fires, 3600 + 300);
+        // Day mask that excludes Thursday hides the item.
+        let mut masked = item(30, "not-today");
+        masked.days_of_week_mask = 1; // Sunday only
+        assert!(upcoming_clock_item(&[masked], now).is_none());
+        assert!(upcoming_clock_item(&[], now).is_none());
+    }
+
+    #[test]
+    fn sparkline_points_maps_range_and_scale() {
+        // Two samples spanning the window: first at x=0, last at x=w.
+        let pts = sparkline_points(&[(100, 0), (200, 10)], 100, 200, 260.0, 48.0);
+        let parts: Vec<&str> = pts.split(' ').collect();
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].starts_with("0.0,"), "got: {}", parts[0]);
+        assert!(parts[1].starts_with("260.0,"), "got: {}", parts[1]);
+        // Max listeners maps near the top (y=2), zero near the bottom (y=h-2).
+        assert!(parts[0].ends_with(",46.0"), "got: {}", parts[0]);
+        assert!(parts[1].ends_with(",2.0"), "got: {}", parts[1]);
+        // Degenerate inputs are empty, not panics.
+        assert!(sparkline_points(&[], 0, 100, 260.0, 48.0).is_empty());
+        assert!(sparkline_points(&[(5, 1)], 100, 100, 260.0, 48.0).is_empty());
+    }
+
+    #[test]
     fn parse_track_ids_basic() {
         let v = parse_track_ids("1, 2 3\n4");
         assert_eq!(v, vec![1, 2, 3, 4]);
@@ -3488,6 +3976,81 @@ mod tests {
         assert!(s.clock_items.is_empty());
         assert_eq!(s.clock_lookahead_seconds, 90);
         assert!(s.clock_enabled);
+    }
+
+    // ---- HLS output ----------------------------------------------------
+
+    #[test]
+    fn settings_default_has_hls_fields_disabled() {
+        let s = RadioSettings::default();
+        assert!(!s.enable_hls);
+        assert_eq!(s.hls_dir, "./media/radio-hls");
+    }
+
+    #[test]
+    fn settings_toml_round_trip_with_hls() {
+        let s = RadioSettings {
+            enable_hls: true,
+            hls_dir: "./custom/hls-out".into(),
+            ..RadioSettings::default()
+        };
+        let toml = toml::to_string(&s).unwrap();
+        let back: RadioSettings = toml::from_str(&toml).unwrap();
+        assert!(back.enable_hls);
+        assert_eq!(back.hls_dir, "./custom/hls-out");
+    }
+
+    #[test]
+    fn settings_back_compat_when_hls_keys_missing() {
+        // Existing radio.toml files in the wild don't have these
+        // fields. They must deserialize cleanly with defaults.
+        let minimal = r#"
+            port = 8000
+            mount_path = "/listen.mp3"
+            source_password = "x"
+            content_type = "audio/mpeg"
+            stream_name = "Test"
+        "#;
+        let s: RadioSettings = toml::from_str(minimal).unwrap();
+        assert!(!s.enable_hls);
+        assert_eq!(s.hls_dir, "./media/radio-hls");
+    }
+
+    #[test]
+    fn hls_segment_name_accepts_ffmpeg_output() {
+        assert!(is_safe_segment_name("seg_00001.ts"));
+        assert!(is_safe_segment_name("seg_00000.ts"));
+        assert!(is_safe_segment_name("seg_99999.ts"));
+        // More digits than %05d pads to is still fine — ffmpeg widens
+        // the field once the counter passes 99999.
+        assert!(is_safe_segment_name("seg_123456.ts"));
+        // Fewer digits also matches ^seg_[0-9]+\.ts$.
+        assert!(is_safe_segment_name("seg_1.ts"));
+    }
+
+    #[test]
+    fn hls_segment_name_rejects_traversal_and_garbage() {
+        // Path traversal, in both separator flavours.
+        assert!(!is_safe_segment_name("../seg_00001.ts"));
+        assert!(!is_safe_segment_name("..%2Fseg_00001.ts"));
+        assert!(!is_safe_segment_name("seg_..%2F..%2Fetc.ts"));
+        assert!(!is_safe_segment_name("..\\seg_00001.ts"));
+        assert!(!is_safe_segment_name("seg_1\\.ts"));
+        // Absolute paths.
+        assert!(!is_safe_segment_name("/etc/passwd"));
+        assert!(!is_safe_segment_name("C:\\Windows\\seg_1.ts"));
+        // Wrong extension / trailing junk after .ts.
+        assert!(!is_safe_segment_name("live.m3u8"));
+        assert!(!is_safe_segment_name("seg_00001.m3u8"));
+        assert!(!is_safe_segment_name("seg_1.ts.exe"));
+        assert!(!is_safe_segment_name("seg_00001.TS"));
+        // Non-digit payloads, empty payloads, empty string.
+        assert!(!is_safe_segment_name("seg_abc.ts"));
+        assert!(!is_safe_segment_name("seg_.ts"));
+        assert!(!is_safe_segment_name("seg_00001ts"));
+        assert!(!is_safe_segment_name(""));
+        assert!(!is_safe_segment_name("seg_"));
+        assert!(!is_safe_segment_name(".ts"));
     }
 
     #[test]

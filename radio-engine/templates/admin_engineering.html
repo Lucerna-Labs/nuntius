@@ -268,6 +268,32 @@
     </section>
 
     <section class="eng-card">
+      <h2>HLS output</h2>
+      <p class="eng-card__lede">Serve the station as HTTP Live Streaming — an AAC/MPEG-TS segment playlist that Safari, iOS, and hls.js players consume over plain HTTP. Runs alongside the Icecast mount; enabling it does not affect existing listeners. Requires <code>ffmpeg</code>.</p>
+
+      <label class="eng-toggle" style="margin-bottom:18px;">
+        <input type="checkbox" name="enable_hls" value="1" {% if enable_hls %}checked{% endif %}>
+        <span>
+          <span class="eng-toggle__title">Enable HLS output</span>
+          <span class="eng-toggle__sub">A background transcoder re-encodes the master broadcast to AAC and writes rolling 4-second segments. Old segments are deleted automatically.</span>
+        </span>
+      </label>
+
+      <label class="eng-field">
+        <span class="eng-field__label">Segment directory</span>
+        <input class="eng-input" type="text" name="hls_dir" value="{{ hls_dir }}" placeholder="./media/radio-hls">
+        <span class="eng-field__hint">Where segments and the playlist are written. Created on start; stale segments from previous runs are cleaned up.</span>
+      </label>
+
+      {% if enable_hls %}
+      <label class="eng-field">
+        <span class="eng-field__label">Playlist URL</span>
+        <span class="eng-field__hint">Point HLS players at <code>/radio/hls/live.m3u8</code> on this server.</span>
+      </label>
+      {% endif %}
+    </section>
+
+    <section class="eng-card">
       <h2>Dead-air backup</h2>
       <p class="eng-card__lede">If the AutoDJ can't find a track to play for this long, fall back to a pre-configured backup rotation. Prevents listener-facing silence during outages, missing files, or schedule gaps.</p>
 

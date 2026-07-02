@@ -118,6 +118,15 @@
       letter-spacing: .06em;
     }
 
+    /* Up next readout */
+    .up-next {
+      margin-top: 14px;
+      font: 500 11px/1.5 var(--font-mono);
+      letter-spacing: .08em;
+      color: var(--ink-faint);
+    }
+    .up-next .t { color: var(--phosphor); }
+
     /* Transport */
     .transport { display: flex; align-items: center; gap: 18px; margin-top: 20px; }
     .play-btn {
@@ -301,6 +310,8 @@
               <div class="times"><span id="t-elapsed">0:00</span><span id="t-total">0:00</span></div>
             </div>
 
+            <div class="up-next" id="up-next" hidden></div>
+
             <div class="transport">
               <button class="play-btn" id="play" aria-label="Play live stream">
                 <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
@@ -359,6 +370,8 @@
       np: null,          // now_playing object or null
       live: false,
       listeners: 0,
+      upNext: null,      // { label, track_title, fires_at } or null
+      playlist: null,    // active playlist name or null
       clockSkew: 0       // serverNow - clientNow, seconds
     };
     var lastTrackKey = null;
@@ -391,7 +404,9 @@
 
       var badge = $('src-badge');
       if (np) {
-        badge.textContent = sourceLabel(np.source);
+        var label = sourceLabel(np.source);
+        if (np.source === 'autodj' && state.playlist) label += ' · ' + state.playlist.toUpperCase();
+        badge.textContent = label;
         badge.classList.toggle('live', np.source === 'live' || np.source === 'remote_presenter');
         $('now-title').textContent = np.title || stationName;
         $('now-artist').textContent = np.artist || '';
@@ -411,7 +426,23 @@
           ? '▶ ' + np.title + (np.artist ? ' — ' + np.artist : '') + ' · ' + stationName
           : stationName + ' — Listen Live';
       }
+      renderUpNext();
       renderProgress();
+    }
+
+    function renderUpNext() {
+      var el = $('up-next');
+      var un = state.upNext;
+      if (!un) { el.hidden = true; return; }
+      var d = new Date(un.fires_at * 1000);
+      var t = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+      el.textContent = '';
+      el.appendChild(document.createTextNode('UP NEXT '));
+      var ts = document.createElement('span'); ts.className = 't'; ts.textContent = t;
+      el.appendChild(ts);
+      var text = ' — ' + un.label + (un.track_title ? ' · ' + un.track_title : '');
+      el.appendChild(document.createTextNode(text));
+      el.hidden = false;
     }
 
     function renderProgress() {
@@ -600,6 +631,8 @@
         state.np = ev.now_playing;
         state.live = !!ev.live;
         state.listeners = ev.listeners || 0;
+        state.upNext = ev.up_next || null;
+        state.playlist = ev.active_playlist || null;
         if (ev.ts) state.clockSkew = ev.ts - Date.now() / 1000;
         renderHistory(ev.history);
       } else if (ev.type === 'update') {
@@ -607,6 +640,8 @@
         state.np = ev.now_playing;
         state.live = !!ev.live;
         state.listeners = ev.listeners || 0;
+        state.upNext = ev.up_next || null;
+        state.playlist = ev.active_playlist || null;
         if (ev.ts) state.clockSkew = ev.ts - Date.now() / 1000;
         var newKey = state.np ? (state.np.track_id || state.np.title) : null;
         if (newKey !== prevKey) refreshHistory();
@@ -645,6 +680,8 @@
             state.np = d.now_playing;
             state.live = !!d.live;
             state.listeners = d.listeners || 0;
+            state.upNext = d.up_next || null;
+            state.playlist = d.active_playlist || null;
             if (d.now_unix) state.clockSkew = d.now_unix - Date.now() / 1000;
             renderHistory(d.history);
             render();
