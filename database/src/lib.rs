@@ -92,6 +92,14 @@ const VIDEO_PODCASTS_CHRONO_INDEX: TableDefinition<&str, u64> =
 const VIDEO_PODCASTS_SLUG_INDEX: TableDefinition<&str, u64> =
     TableDefinition::new("video_podcasts_slug_index");
 
+/// Listener statistics (radio plugin).
+/// One row per minute holds the peak concurrent listener count observed
+/// during that minute. u64 keys sort numerically in redb, so range scans
+/// over `[from_ts, to_ts]` come back in chronological order for free.
+/// Key: unix timestamp rounded down to the minute (seconds, u64)
+/// Value: peak concurrent listeners observed during that minute (u32)
+const LISTENER_STATS_TABLE: TableDefinition<u64, u32> = TableDefinition::new("listener_stats");
+
 // ----------------------------------------------------------------------------
 // bincode helpers
 //
@@ -447,6 +455,7 @@ impl CccDB {
             write_txn.open_table(VIDEO_PODCASTS_TABLE)?;
             write_txn.open_table(VIDEO_PODCASTS_CHRONO_INDEX)?;
             write_txn.open_table(VIDEO_PODCASTS_SLUG_INDEX)?;
+            write_txn.open_table(LISTENER_STATS_TABLE)?;
             write_txn.open_table(COUNTERS_TABLE)?;
         }
         write_txn.commit()?;
@@ -1179,6 +1188,61 @@ impl CccDB {
         }
         Ok(out)
     }
+
+    // --- LISTENER STATS ---
+
+    fn minute_key(ts: u64) -> u64 {
+        ts - (ts % 60)
+    }
+
+    /// Record a concurrent-listener sample. `ts` is rounded down to the
+    /// minute and the row for that minute is upserted to
+    /// `max(existing, listeners)` — each row is the minute's peak, so
+    /// callers can sample as often as they like without inflating storage.
+    pub fn record_listener_sample(&self, ts: u64, listeners: u32) -> Result<(), Error> {
+        let minute = Self::minute_key(ts);
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(LISTENER_STATS_TABLE)?;
+            let current = table.get(minute)?.map(|v| v.value()).unwrap_or(0);
+            table.insert(minute, current.max(listeners))?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Ascending `(minute_ts, peak_listeners)` samples whose minute key
+    /// falls in `[from_ts, to_ts]` (inclusive). Keys are minute-aligned,
+    /// so round `from_ts` down if you need the minute a mid-minute
+    /// timestamp falls inside.
+    pub fn listener_samples(&self, from_ts: u64, to_ts: u64) -> Result<Vec<(u64, u32)>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(LISTENER_STATS_TABLE)?;
+        let mut out = Vec::new();
+        for r in table.range(from_ts..=to_ts)? {
+            let (k, v) = r?;
+            out.push((k.value(), v.value()));
+        }
+        Ok(out)
+    }
+
+    /// Delete every sample whose minute key is strictly older than
+    /// `older_than_ts`. Returns how many rows were removed. Run this
+    /// periodically to keep the stats table bounded.
+    pub fn prune_listener_samples(&self, older_than_ts: u64) -> Result<usize, Error> {
+        let write_txn = self.db.begin_write()?;
+        let removed = {
+            let mut table = write_txn.open_table(LISTENER_STATS_TABLE)?;
+            let mut removed = 0usize;
+            for entry in table.extract_from_if(..older_than_ts, |_, _| true)? {
+                entry?;
+                removed += 1;
+            }
+            removed
+        };
+        write_txn.commit()?;
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
@@ -1346,6 +1410,70 @@ mod tests {
         let public = db.latest_published_podcast_episodes(10).unwrap();
         assert_eq!(public.len(), 1, "drafts must not be in the chrono index");
         assert_eq!(public[0].id, 2);
+        cleanup(&path);
+    }
+
+    // ---- listener stats ----
+
+    #[test]
+    fn listener_sample_keys_round_down_to_minute() {
+        let path = tmp_path("listener_round_down");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        // 120, 130, and 179 all fall inside the minute starting at 120.
+        db.record_listener_sample(120, 1).unwrap();
+        db.record_listener_sample(130, 2).unwrap();
+        db.record_listener_sample(179, 3).unwrap();
+        let samples = db.listener_samples(0, 1_000).unwrap();
+        assert_eq!(samples, vec![(120, 3)], "all three samples share one key");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn listener_sample_upsert_keeps_max() {
+        let path = tmp_path("listener_max");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        db.record_listener_sample(60, 5).unwrap();
+        // A lower sample in the same minute must not clobber the peak.
+        db.record_listener_sample(61, 3).unwrap();
+        assert_eq!(db.listener_samples(60, 60).unwrap(), vec![(60, 5)]);
+        // A higher sample raises it.
+        db.record_listener_sample(119, 9).unwrap();
+        assert_eq!(db.listener_samples(60, 60).unwrap(), vec![(60, 9)]);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn listener_samples_range_is_ascending_and_inclusive() {
+        let path = tmp_path("listener_range");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        // Insert out of chronological order — the u64 key ordering
+        // must hand them back ascending regardless.
+        db.record_listener_sample(240, 4).unwrap();
+        db.record_listener_sample(60, 1).unwrap();
+        db.record_listener_sample(180, 3).unwrap();
+        db.record_listener_sample(120, 2).unwrap();
+        // Both bounds are inclusive; 60 and 240 sit outside.
+        let samples = db.listener_samples(120, 180).unwrap();
+        assert_eq!(samples, vec![(120, 2), (180, 3)]);
+        // Full window returns everything, ascending.
+        let all = db.listener_samples(0, 10_000).unwrap();
+        assert_eq!(all, vec![(60, 1), (120, 2), (180, 3), (240, 4)]);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn prune_listener_samples_removes_older_and_counts() {
+        let path = tmp_path("listener_prune");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+        db.record_listener_sample(60, 1).unwrap();
+        db.record_listener_sample(120, 2).unwrap();
+        db.record_listener_sample(180, 3).unwrap();
+        // Strictly-older-than: the 180 row survives a cutoff of 180.
+        let removed = db.prune_listener_samples(180).unwrap();
+        assert_eq!(removed, 2);
+        assert_eq!(db.listener_samples(0, 10_000).unwrap(), vec![(180, 3)]);
+        // Nothing left to prune below the cutoff.
+        assert_eq!(db.prune_listener_samples(180).unwrap(), 0);
         cleanup(&path);
     }
 }
