@@ -257,6 +257,7 @@ fn preempted(state: &EngineState) -> bool {
     state.autodj_paused.load(Ordering::SeqCst)
         || state.source_alive.load(Ordering::SeqCst)
         || state.relay_alive.load(Ordering::SeqCst)
+        || state.presenter_alive.load(Ordering::SeqCst)
 }
 
 fn announce_track(state: &EngineState, track: &Track) {

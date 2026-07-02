@@ -1,0 +1,7 @@
+enabled = true
+slow_mode_ms = 2000
+max_message_length = 200
+history_capacity = 50
+max_connections = 200
+banned_nicks = []
+broadcast_capacity = 128

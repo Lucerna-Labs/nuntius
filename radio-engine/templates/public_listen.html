@@ -4,98 +4,746 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ stream_name }} — Listen Live</title>
-  <link rel="stylesheet" href="/admin/static/admin.css">
+  <meta name="description" content="{{ stream_name }} — live 24/7 radio. Tune in now.">
+  <meta name="theme-color" content="#07090d">
+  <meta property="og:type" content="music.radio_station">
+  <meta property="og:title" content="{{ stream_name }} — Listen Live">
+  <meta property="og:description" content="Live 24/7 radio. Tune in now.">
+  <meta property="og:image" content="/radio/icon.svg">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="/radio/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/radio/manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/assets/public.css">
   <style>
-    .listen { max-width: 720px; margin: 60px auto; padding: 0 24px; }
-    .listen h1 { margin: 0 0 8px; }
-    .listen .meta { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; }
-    .listen .player { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
-    .listen .now { font-size: 22px; font-weight: 700; margin: 16px 0 4px; }
-    .listen .now small { color: var(--text-dim); font-size: 14px; font-weight: normal; display: block; margin-top: 4px; }
-    .listen audio { width: 100%; margin-top: 16px; }
-    .listen .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ff4d4d; margin-right: 6px; vertical-align: middle; animation: pulse 1.5s ease-in-out infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-    .listen .history { margin-top: 32px; }
-    .listen .history h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); }
-    .listen .history ol { list-style: decimal; padding-left: 24px; }
-    .listen .history li { padding: 4px 0; color: var(--text-dim); }
-    .listen .history li strong { color: var(--text); }
+    /* --- Listen page ----------------------------------------------------- */
+    .listen-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 22px;
+      align-items: start;
+      margin-top: 8px;
+    }
+    .listen-grid.no-chat { grid-template-columns: minmax(0, 1fr); }
+
+    /* Player deck */
+    .deck {
+      background: linear-gradient(180deg, var(--bg-raise), var(--bg-panel));
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 26px;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 26px;
+      align-items: center;
+      overflow: hidden;
+      position: relative;
+    }
+    .art {
+      position: relative;
+      width: 220px;
+      aspect-ratio: 1;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--line-bright);
+      background: var(--bg-deep);
+      flex-shrink: 0;
+    }
+    .art .fallback {
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(80% 80% at 30% 25%, rgba(245,165,36,.55), transparent 60%),
+        radial-gradient(90% 90% at 75% 80%, rgba(61,219,196,.4), transparent 65%),
+        var(--bg-raise);
+      filter: saturate(1.1);
+      transition: filter 1s;
+      display: grid; place-items: center;
+    }
+    .art .fallback svg { width: 54px; height: 54px; opacity: .5; }
+    .art img {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      opacity: 0;
+      transition: opacity .4s ease;
+    }
+    .art img.loaded { opacity: 1; }
+
+    .meta { min-width: 0; }
+    .meta .badges { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+    .src-badge {
+      font: 600 10px/1 var(--font-mono);
+      letter-spacing: .14em;
+      color: var(--phosphor);
+      border: 1px solid rgba(61,219,196,.35);
+      background: rgba(61,219,196,.07);
+      border-radius: 999px;
+      padding: 6px 10px;
+      text-transform: uppercase;
+    }
+    .src-badge.live { color: var(--live); border-color: rgba(255,82,82,.4); background: rgba(255,82,82,.08); }
+    .now-title {
+      font-family: var(--font-display);
+      font-size: clamp(22px, 3.4vw, 34px);
+      font-weight: 700;
+      line-height: 1.15;
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    .now-artist { color: var(--ink-dim); font-size: 16px; margin: 6px 0 0; min-height: 24px; overflow-wrap: anywhere; }
+
+    /* Progress */
+    .progress { margin-top: 18px; }
+    .progress.hidden { visibility: hidden; }
+    .progress .bar {
+      height: 5px;
+      background: var(--line);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress .fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--signal), var(--signal-hot));
+      transition: width .5s linear;
+    }
+    .progress .times {
+      display: flex; justify-content: space-between;
+      font: 500 11px/1 var(--font-mono);
+      color: var(--ink-faint);
+      margin-top: 7px;
+      letter-spacing: .06em;
+    }
+
+    /* Transport */
+    .transport { display: flex; align-items: center; gap: 18px; margin-top: 20px; }
+    .play-btn {
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      border: none;
+      background: var(--signal);
+      color: var(--signal-ink);
+      cursor: pointer;
+      display: grid; place-items: center;
+      box-shadow: 0 0 0 0 rgba(245,165,36,.45);
+      transition: transform .12s, background .15s, box-shadow .3s;
+      flex-shrink: 0;
+    }
+    .play-btn:hover { background: var(--signal-hot); transform: scale(1.04); }
+    .play-btn:active { transform: scale(.97); }
+    .play-btn.playing { box-shadow: 0 0 28px 4px rgba(245,165,36,.35); }
+    .play-btn svg { width: 26px; height: 26px; }
+    .play-btn .icon-stop { display: none; }
+    .play-btn.playing .icon-play { display: none; }
+    .play-btn.playing .icon-stop { display: block; }
+
+    .vol { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 220px; }
+    .vol svg { width: 18px; height: 18px; color: var(--ink-dim); flex-shrink: 0; cursor: pointer; }
+    .vol input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--line-bright);
+      outline: none;
+    }
+    .vol input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--ink);
+      cursor: pointer;
+      border: none;
+    }
+    .vol input[type="range"]::-moz-range-thumb {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--ink); cursor: pointer; border: none;
+    }
+
+    /* Visualizer */
+    .viz-wrap {
+      margin-top: 22px;
+      background: var(--bg-panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 10px 14px 6px;
+    }
+    .viz-wrap canvas { width: 100%; height: 72px; display: block; }
+
+    /* Transmission log */
+    .log { margin-top: 22px; }
+    .log h2 { font-size: 15px; margin: 0 0 12px; color: var(--ink-dim); }
+    .log ol { list-style: none; margin: 0; padding: 0; }
+    .log li {
+      display: flex; align-items: baseline; gap: 14px;
+      padding: 11px 4px;
+      border-bottom: 1px solid var(--line);
+      animation: log-in .35s ease both;
+    }
+    @keyframes log-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+    .log .t { font: 500 11px/1.4 var(--font-mono); color: var(--ink-faint); min-width: 44px; letter-spacing: .05em; }
+    .log .title { color: var(--ink); font-weight: 600; font-size: 14px; }
+    .log .artist { color: var(--ink-dim); font-size: 13px; }
+
+    /* Chat rail */
+    .chat {
+      background: var(--bg-panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      display: none;
+      flex-direction: column;
+      height: 560px;
+      position: sticky;
+      top: 18px;
+      overflow: hidden;
+    }
+    .chat.enabled { display: flex; }
+    .chat header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .chat header h2 { margin: 0; font-size: 13px; letter-spacing: .04em; }
+    .chat .msgs {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      display: flex; flex-direction: column; gap: 9px;
+      overscroll-behavior: contain;
+    }
+    .chat .msg { font-size: 13.5px; line-height: 1.45; overflow-wrap: anywhere; animation: log-in .25s ease both; }
+    .chat .msg .nick { color: var(--phosphor); font-weight: 600; margin-right: 6px; }
+    .chat .msg .nick.me { color: var(--signal-hot); }
+    .chat .notice { font: 500 11px/1.5 var(--font-mono); color: var(--ink-faint); }
+    .chat .notice.err { color: var(--live); }
+    .chat form {
+      display: flex; gap: 8px;
+      padding: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .chat input[type="text"] {
+      background: var(--bg-deep);
+      border: 1px solid var(--line-bright);
+      border-radius: 8px;
+      color: var(--ink);
+      font: 400 13.5px/1 var(--font-body);
+      padding: 10px 12px;
+      outline: none;
+      min-width: 0;
+    }
+    .chat input[type="text"]:focus { border-color: var(--phosphor); }
+    .chat input.nick-input { width: 92px; flex-shrink: 0; }
+    .chat input.text-input { flex: 1; }
+    .chat button {
+      background: var(--signal); color: var(--signal-ink);
+      border: none; border-radius: 8px;
+      font: 600 13px/1 var(--font-body);
+      padding: 0 14px; cursor: pointer;
+    }
+    .chat button:hover { background: var(--signal-hot); }
+
+    @media (max-width: 1023px) {
+      .listen-grid { grid-template-columns: minmax(0, 1fr); }
+      .chat { position: static; height: 420px; }
+    }
+    @media (max-width: 640px) {
+      .deck { grid-template-columns: minmax(0, 1fr); padding: 20px; }
+      .art { width: min(62vw, 260px); margin: 0 auto; }
+      .meta { text-align: center; }
+      .meta .badges, .transport { justify-content: center; }
+      .progress .times { max-width: 320px; margin-left: auto; margin-right: auto; }
+    }
   </style>
 </head>
-<body class="cms">
-  <main class="listen">
-    <h1>{{ stream_name }}</h1>
-    <div class="meta">
-      <span class="pulse"></span><span id="status">Connecting…</span>
-      &nbsp;·&nbsp; <span id="listeners">— listeners</span>
-    </div>
+<body class="nuntius-public">
+  <div class="pub-wrap">
+    <header class="pub-top">
+      <a class="pub-brand" href="/">{{ stream_name }}</a>
+      <nav class="pub-nav" aria-label="Site">
+        <a href="/radio" aria-current="page">Live radio</a>
+        <a href="/podcasts">Podcasts</a>
+        <a href="/videos">Video</a>
+        <a href="/blog/">Blog</a>
+      </nav>
+      <div style="display:flex; align-items:center; gap:18px;">
+        <span class="onair" id="onair"><span class="lamp"></span><span id="onair-text">STANDBY</span></span>
+        <span class="pub-readout" id="listeners" aria-live="polite">— LISTENING</span>
+      </div>
+    </header>
 
-    <div class="player">
-      <div class="now" id="now-title">Loading…</div>
-      <small class="now"><span id="now-artist"></span></small>
-      <audio id="audio" controls preload="none"></audio>
-    </div>
+    <main class="listen-grid no-chat" id="grid">
+      <section aria-label="Player">
+        <div class="deck">
+          <div class="art" id="art">
+            <div class="fallback" id="art-fallback" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <circle cx="12" cy="14" r="1.6" fill="currentColor" stroke="none"/>
+                <path d="M8.5 10.5a5 5 0 0 1 7 0"/>
+                <path d="M6 8a8.5 8.5 0 0 1 12 0"/>
+              </svg>
+            </div>
+            <img id="art-img" alt="" aria-hidden="true">
+          </div>
 
-    <section class="history">
-      <h2>Previously played</h2>
-      <ol id="history">
-        <li>—</li>
-      </ol>
-    </section>
-  </main>
+          <div class="meta" aria-live="polite">
+            <div class="badges">
+              <span class="src-badge" id="src-badge">AUTO DJ</span>
+            </div>
+            <h1 class="now-title" id="now-title">Tuning…</h1>
+            <p class="now-artist" id="now-artist"></p>
+
+            <div class="progress hidden" id="progress">
+              <div class="bar"><div class="fill" id="progress-fill"></div></div>
+              <div class="times"><span id="t-elapsed">0:00</span><span id="t-total">0:00</span></div>
+            </div>
+
+            <div class="transport">
+              <button class="play-btn" id="play" aria-label="Play live stream">
+                <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
+                <svg class="icon-stop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></svg>
+              </button>
+              <div class="vol">
+                <svg id="mute" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" role="button" tabindex="0" aria-label="Mute"><path d="M11 5 6 9H3v6h3l5 4z" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18 6a9 9 0 0 1 0 12"/></svg>
+                <input type="range" id="vol" min="0" max="100" value="90" aria-label="Volume">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="viz-wrap" aria-hidden="true">
+          <canvas id="viz"></canvas>
+        </div>
+
+        <section class="log" aria-label="Recently played">
+          <h2 class="pub-kicker">Transmission log</h2>
+          <ol id="history"></ol>
+        </section>
+      </section>
+
+      <aside class="chat" id="chat" aria-label="Listener chat">
+        <header>
+          <h2>Listener chat</h2>
+          <span class="pub-readout" id="chat-status">·</span>
+        </header>
+        <div class="msgs" id="chat-msgs" role="log" aria-live="polite"></div>
+        <form id="chat-form" autocomplete="off">
+          <input type="text" class="nick-input" id="chat-nick" placeholder="name" maxlength="24" aria-label="Nickname">
+          <input type="text" class="text-input" id="chat-text" placeholder="Say something…" aria-label="Message">
+          <button type="submit">Send</button>
+        </form>
+      </aside>
+    </main>
+
+    <footer class="pub-footer">
+      <span>Powered by Nuntius</span>
+      <span><a href="/podcasts/feed.xml">Podcast RSS</a></span>
+    </footer>
+  </div>
+
+  <audio id="audio" preload="none" style="display:none"></audio>
 
   <script>
-    // The radio engine listens on a dedicated TCP port (not the API port),
-    // so we build the audio URL from window.location.hostname + the
-    // server-supplied radio_port + mount_path. This keeps the page
-    // working on any deployment without operator config.
-    const audio = document.getElementById('audio');
-    let lastTrackId = null;
+  'use strict';
+  (function () {
+    var $ = function (id) { return document.getElementById(id); };
+    var audio = $('audio');
+    var STREAM_URL = '/radio/stream';
+    var stationName = document.title.replace(/ — Listen Live$/, '');
 
-    async function refresh() {
-      try {
-        const r = await fetch('/api/radio/nowplaying', { cache: 'no-store' });
-        const data = await r.json();
+    // --- state pushed from the server ------------------------------------
+    var state = {
+      np: null,          // now_playing object or null
+      live: false,
+      listeners: 0,
+      clockSkew: 0       // serverNow - clientNow, seconds
+    };
+    var lastTrackKey = null;
 
-        document.getElementById('status').textContent = data.live ? 'Live broadcast' : 'On air';
-        document.getElementById('listeners').textContent =
-          data.listeners + ' listener' + (data.listeners === 1 ? '' : 's');
+    // --- rendering --------------------------------------------------------
+    function fmtTime(s) {
+      s = Math.max(0, Math.floor(s));
+      var m = Math.floor(s / 60), sec = s % 60;
+      return m + ':' + String(sec).padStart(2, '0');
+    }
 
-        if (data.now_playing) {
-          document.getElementById('now-title').textContent = data.now_playing.title || '—';
-          document.getElementById('now-artist').textContent = data.now_playing.artist || '';
-          lastTrackId = data.now_playing.track_id;
-        } else {
-          document.getElementById('now-title').textContent = 'Off air';
-          document.getElementById('now-artist').textContent = '';
-        }
-
-        if (audio.src === '' || audio.src === window.location.href) {
-          // Set the streaming URL once, on the first poll.
-          const streamUrl = window.location.protocol + '//' +
-            window.location.hostname + ':' + data.radio_port + data.mount_path;
-          audio.src = streamUrl;
-        }
-
-        const ol = document.getElementById('history');
-        if (data.history && data.history.length) {
-          ol.innerHTML = data.history.map(h =>
-            '<li><strong>' + escapeHtml(h.title) + '</strong> — ' + escapeHtml(h.artist) + '</li>'
-          ).join('');
-        }
-      } catch (e) {
-        document.getElementById('status').textContent = 'Connection error';
+    function sourceLabel(src) {
+      switch (src) {
+        case 'live': return 'LIVE SOURCE';
+        case 'relay': return 'RELAY';
+        case 'remote_presenter': return 'PRESENTER';
+        case 'backup': return 'BACKUP';
+        case 'clock': return 'STATION ID';
+        default: return 'AUTO DJ';
       }
     }
 
-    function escapeHtml(s) {
-      return String(s || '').replace(/[&<>"]/g, c => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'
-      }[c]));
+    function render() {
+      var np = state.np;
+      var lamp = $('onair');
+      lamp.classList.toggle('is-live', state.live);
+      lamp.classList.toggle('is-on', !state.live && !!np);
+      $('onair-text').textContent = state.live ? 'ON AIR · LIVE' : (np ? 'ON AIR' : 'STANDBY');
+      $('listeners').textContent = state.listeners + ' LISTENING';
+
+      var badge = $('src-badge');
+      if (np) {
+        badge.textContent = sourceLabel(np.source);
+        badge.classList.toggle('live', np.source === 'live' || np.source === 'remote_presenter');
+        $('now-title').textContent = np.title || stationName;
+        $('now-artist').textContent = np.artist || '';
+      } else {
+        badge.textContent = 'OFF AIR';
+        badge.classList.remove('live');
+        $('now-title').textContent = 'Off air';
+        $('now-artist').textContent = '';
+      }
+
+      var key = np ? (np.track_id || (np.title + '|' + np.artist)) : null;
+      if (key !== lastTrackKey) {
+        lastTrackKey = key;
+        updateArtwork(np);
+        updateMediaSession(np);
+        document.title = np && np.title
+          ? '▶ ' + np.title + (np.artist ? ' — ' + np.artist : '') + ' · ' + stationName
+          : stationName + ' — Listen Live';
+      }
+      renderProgress();
     }
 
-    refresh();
-    setInterval(refresh, 5000);
+    function renderProgress() {
+      var np = state.np;
+      var box = $('progress');
+      if (!np || !np.duration_seconds || np.duration_seconds <= 0) {
+        box.classList.add('hidden');
+        return;
+      }
+      box.classList.remove('hidden');
+      var now = Date.now() / 1000 + state.clockSkew;
+      var elapsed = Math.min(now - np.started_at, np.duration_seconds);
+      var pct = Math.max(0, Math.min(100, elapsed / np.duration_seconds * 100));
+      $('progress-fill').style.width = pct + '%';
+      $('t-elapsed').textContent = fmtTime(elapsed);
+      $('t-total').textContent = fmtTime(np.duration_seconds);
+    }
+    setInterval(renderProgress, 500);
+
+    function renderHistory(items) {
+      if (!items || !items.length) return;
+      var ol = $('history');
+      ol.textContent = '';
+      // Server sends history newest-first; show the 12 most recent,
+      // newest at the top.
+      items.slice(0, 12).forEach(function (h) {
+        var li = document.createElement('li');
+        var t = document.createElement('span'); t.className = 't';
+        var d = new Date(h.started_at * 1000);
+        t.textContent = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+        var body = document.createElement('span');
+        var ti = document.createElement('span'); ti.className = 'title'; ti.textContent = h.title || '—';
+        body.appendChild(ti);
+        if (h.artist) {
+          var ar = document.createElement('span'); ar.className = 'artist'; ar.textContent = ' · ' + h.artist;
+          body.appendChild(ar);
+        }
+        li.appendChild(t); li.appendChild(body);
+        ol.appendChild(li);
+      });
+    }
+
+    // --- artwork ----------------------------------------------------------
+    function updateArtwork(np) {
+      var img = $('art-img');
+      img.classList.remove('loaded');
+      if (np && np.track_id) {
+        var url = '/api/radio/artwork/' + np.track_id;
+        img.onload = function () { img.classList.add('loaded'); };
+        img.onerror = function () { img.classList.remove('loaded'); };
+        img.src = url;
+      } else {
+        img.removeAttribute('src');
+      }
+      // Shift the fallback gradient per track so even artless tracks change.
+      var seed = 0, s = np ? (np.title || '') + (np.artist || '') : '';
+      for (var i = 0; i < s.length; i++) seed = (seed * 31 + s.charCodeAt(i)) >>> 0;
+      $('art-fallback').style.filter = 'saturate(1.1) hue-rotate(' + (seed % 360) + 'deg)';
+    }
+
+    // --- Media Session ------------------------------------------------------
+    function updateMediaSession(np) {
+      if (!('mediaSession' in navigator)) return;
+      var art = np && np.track_id
+        ? [{ src: location.origin + '/api/radio/artwork/' + np.track_id, sizes: '512x512' }]
+        : [{ src: location.origin + '/radio/icon.svg', sizes: 'any', type: 'image/svg+xml' }];
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: np ? (np.title || stationName) : stationName,
+          artist: np ? (np.artist || '') : '',
+          album: stationName,
+          artwork: art
+        });
+      } catch (e) { /* metadata is best-effort */ }
+    }
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.setActionHandler('play', startPlayback);
+        navigator.mediaSession.setActionHandler('pause', stopPlayback);
+        navigator.mediaSession.setActionHandler('stop', stopPlayback);
+      } catch (e) { /* older engines */ }
+    }
+
+    // --- playback (live-edge semantics) -------------------------------------
+    var playing = false;
+
+    function startPlayback() {
+      // Re-attach the source each time so resume jumps to the live edge
+      // instead of replaying a stale buffer.
+      audio.src = STREAM_URL + '?t=' + Date.now();
+      var p = audio.play();
+      if (p && p.catch) p.catch(function () { setPlaying(false); });
+      setPlaying(true);
+      initViz();
+    }
+    function stopPlayback() {
+      audio.pause();
+      audio.removeAttribute('src');
+      try { audio.load(); } catch (e) {}
+      setPlaying(false);
+    }
+    function setPlaying(on) {
+      playing = on;
+      $('play').classList.toggle('playing', on);
+      $('play').setAttribute('aria-label', on ? 'Stop' : 'Play live stream');
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = on ? 'playing' : 'paused';
+      }
+    }
+    $('play').addEventListener('click', function () {
+      playing ? stopPlayback() : startPlayback();
+    });
+    audio.addEventListener('error', function () { if (playing) setPlaying(false); });
+
+    // Volume
+    var vol = $('vol');
+    var savedVol = localStorage.getItem('nuntius-vol');
+    if (savedVol !== null) vol.value = savedVol;
+    audio.volume = vol.value / 100;
+    vol.addEventListener('input', function () {
+      audio.volume = vol.value / 100;
+      audio.muted = false;
+      localStorage.setItem('nuntius-vol', vol.value);
+    });
+    $('mute').addEventListener('click', function () { audio.muted = !audio.muted; });
+    $('mute').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); audio.muted = !audio.muted; }
+    });
+
+    // --- visualizer ---------------------------------------------------------
+    var vizStarted = false;
+    function initViz() {
+      if (vizStarted) return;
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      vizStarted = true;
+      try {
+        var ctx = new AC();
+        var srcNode = ctx.createMediaElementSource(audio);
+        var analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.82;
+        srcNode.connect(analyser);
+        analyser.connect(ctx.destination);
+
+        var canvas = $('viz');
+        var c2d = canvas.getContext('2d');
+        var data = new Uint8Array(analyser.frequencyBinCount);
+
+        function draw() {
+          requestAnimationFrame(draw);
+          var w = canvas.clientWidth, h = canvas.clientHeight;
+          if (canvas.width !== w * devicePixelRatio) {
+            canvas.width = w * devicePixelRatio;
+            canvas.height = h * devicePixelRatio;
+            c2d.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+          }
+          c2d.clearRect(0, 0, w, h);
+          analyser.getByteFrequencyData(data);
+          var bars = 64;
+          var step = Math.floor(data.length / bars);
+          var bw = w / bars;
+          for (var i = 0; i < bars; i++) {
+            var v = data[i * step] / 255;
+            var bh = Math.max(2, v * (h - 6));
+            var x = i * bw;
+            var g = c2d.createLinearGradient(0, h, 0, h - bh);
+            g.addColorStop(0, 'rgba(245,165,36,0.9)');
+            g.addColorStop(1, 'rgba(61,219,196,0.85)');
+            c2d.fillStyle = g;
+            c2d.fillRect(x + 1, h - bh, bw - 2, bh);
+          }
+        }
+        draw();
+        // Some browsers suspend fresh contexts until a gesture completes.
+        if (ctx.state === 'suspended') ctx.resume();
+      } catch (e) { /* visualizer is decorative */ }
+    }
+
+    // --- live updates: SSE with polling fallback -----------------------------
+    var sseFailures = 0;
+    var pollTimer = null;
+
+    function applyEvent(ev) {
+      if (ev.type === 'snapshot') {
+        state.np = ev.now_playing;
+        state.live = !!ev.live;
+        state.listeners = ev.listeners || 0;
+        if (ev.ts) state.clockSkew = ev.ts - Date.now() / 1000;
+        renderHistory(ev.history);
+      } else if (ev.type === 'update') {
+        var prevKey = state.np ? (state.np.track_id || state.np.title) : null;
+        state.np = ev.now_playing;
+        state.live = !!ev.live;
+        state.listeners = ev.listeners || 0;
+        if (ev.ts) state.clockSkew = ev.ts - Date.now() / 1000;
+        var newKey = state.np ? (state.np.track_id || state.np.title) : null;
+        if (newKey !== prevKey) refreshHistory();
+      }
+      render();
+    }
+
+    function refreshHistory() {
+      fetch('/api/radio/nowplaying', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { renderHistory(d.history); })
+        .catch(function () {});
+    }
+
+    function connectSSE() {
+      if (!window.EventSource) { startPolling(); return; }
+      var es = new EventSource('/api/radio/nowplaying/sse');
+      es.onmessage = function (m) {
+        sseFailures = 0;
+        try { applyEvent(JSON.parse(m.data)); } catch (e) {}
+      };
+      es.onerror = function () {
+        es.close();
+        sseFailures++;
+        if (sseFailures >= 3) { startPolling(); return; }
+        setTimeout(connectSSE, Math.min(1000 * Math.pow(2, sseFailures), 15000));
+      };
+    }
+
+    function startPolling() {
+      if (pollTimer) return;
+      var poll = function () {
+        fetch('/api/radio/nowplaying', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            state.np = d.now_playing;
+            state.live = !!d.live;
+            state.listeners = d.listeners || 0;
+            if (d.now_unix) state.clockSkew = d.now_unix - Date.now() / 1000;
+            renderHistory(d.history);
+            render();
+          })
+          .catch(function () { $('onair-text').textContent = 'RECONNECTING'; });
+      };
+      poll();
+      pollTimer = setInterval(poll, 10000);
+      // Keep trying to upgrade back to SSE.
+      setTimeout(function () {
+        sseFailures = 0;
+        clearInterval(pollTimer); pollTimer = null;
+        connectSSE();
+      }, 60000);
+    }
+
+    connectSSE();
+
+    // --- listener chat (optional plugin) -------------------------------------
+    (function initChat() {
+      fetch('/api/live-chat/recent', { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d && d.enabled !== false) enableChat(); })
+        .catch(function () {});
+
+      function enableChat() {
+        $('chat').classList.add('enabled');
+        $('grid').classList.remove('no-chat');
+
+        var msgs = $('chat-msgs');
+        var nickInput = $('chat-nick');
+        var textInput = $('chat-text');
+        var seen = {};
+        nickInput.value = localStorage.getItem('nuntius-chat-nick') || '';
+
+        function notice(text, isErr) {
+          var el = document.createElement('div');
+          el.className = 'notice' + (isErr ? ' err' : '');
+          el.textContent = text;
+          msgs.appendChild(el);
+          msgs.scrollTop = msgs.scrollHeight;
+        }
+        function addMsg(m) {
+          if (m.id && seen[m.id]) return;
+          if (m.id) seen[m.id] = true;
+          var el = document.createElement('div');
+          el.className = 'msg';
+          var nick = document.createElement('span');
+          nick.className = 'nick' + (m.nick === nickInput.value.trim() ? ' me' : '');
+          nick.textContent = m.nick;
+          el.appendChild(nick);
+          el.appendChild(document.createTextNode(m.text));
+          msgs.appendChild(el);
+          while (msgs.children.length > 200) msgs.removeChild(msgs.firstChild);
+          msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        var ws = null, wsBackoff = 1000;
+        function connect() {
+          var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+          ws = new WebSocket(proto + location.host + '/api/live-chat/ws');
+          ws.onopen = function () { wsBackoff = 1000; $('chat-status').textContent = 'LIVE'; };
+          ws.onmessage = function (m) {
+            var f;
+            try { f = JSON.parse(m.data); } catch (e) { return; }
+            if (f.type === 'hello') {
+              msgs.textContent = '';
+              seen = {};
+              // Backlog arrives newest-first; append oldest-first so
+              // live messages continue naturally at the bottom.
+              (f.history || []).slice().reverse().forEach(addMsg);
+              if (f.slow_mode_ms > 0) notice('Slow mode: one message every ' + Math.round(f.slow_mode_ms / 1000) + 's');
+            } else if (f.type === 'msg') {
+              addMsg(f);
+            } else if (f.type === 'rejected') {
+              notice(f.reason, true);
+            }
+          };
+          ws.onclose = function () {
+            $('chat-status').textContent = '·';
+            setTimeout(connect, wsBackoff);
+            wsBackoff = Math.min(wsBackoff * 2, 20000);
+          };
+        }
+        connect();
+
+        $('chat-form').addEventListener('submit', function (e) {
+          e.preventDefault();
+          var nick = nickInput.value.trim();
+          var text = textInput.value.trim();
+          if (!nick) { nickInput.focus(); return; }
+          if (!text || !ws || ws.readyState !== 1) return;
+          localStorage.setItem('nuntius-chat-nick', nick);
+          ws.send(JSON.stringify({ type: 'msg', nick: nick, text: text }));
+          textInput.value = '';
+        });
+      }
+    })();
+  })();
   </script>
 </body>
 </html>

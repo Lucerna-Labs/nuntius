@@ -404,6 +404,10 @@ pub(crate) struct EngineState {
     /// SSE) subscribe here to get push-based now-playing updates
     /// without polling the JSON endpoint.
     pub(crate) np_events: Arc<RwLock<Option<NpEventSender>>>,
+    /// Cache of embedded album art extracted from track files, keyed by
+    /// track id. `None` means "probed, no art" so we don't re-parse the
+    /// file on every request. Bounded — see `ARTWORK_CACHE_CAP`.
+    artwork_cache: Arc<RwLock<std::collections::HashMap<u64, Option<(String, Bytes)>>>>,
 }
 
 impl EngineState {
@@ -505,6 +509,7 @@ impl RadioEnginePlugin {
             db: None,
             spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
             np_events: Arc::new(RwLock::new(Some(nowplaying::channel().0))),
+            artwork_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
         };
         Self {
             port,
@@ -564,6 +569,7 @@ impl RadioEnginePlugin {
             db: None,
             spawn_flags: Arc::new(RwLock::new(std::collections::HashSet::new())),
             np_events: Arc::new(RwLock::new(Some(nowplaying::channel().0))),
+            artwork_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
         };
         Ok(Self {
             port,
@@ -699,9 +705,13 @@ impl Plugin for RadioEnginePlugin {
             Router::new()
                 .route("/", get(public_home))
                 .route("/radio", get(public_listen))
+                .route("/radio/stream", get(public_stream))
+                .route("/radio/manifest.webmanifest", get(public_manifest))
+                .route("/radio/icon.svg", get(public_icon))
                 .route("/api/radio/nowplaying", get(public_now_playing))
                 .route("/api/radio/library", get(public_library))
                 .route("/api/radio/presenter", get(public_presenter_status))
+                .route("/api/radio/artwork/:id", get(public_artwork))
                 .route("/api/radio/nowplaying/stream", get(nowplaying::ws_handler))
                 .route("/api/radio/nowplaying/sse", get(nowplaying::sse_handler))
                 .with_state(st_arc),
@@ -968,22 +978,44 @@ async fn handle_connection(
         };
         state.listener_count.fetch_add(1, Ordering::SeqCst);
 
+        // Split the socket so we can watch for the client hanging up
+        // even while no audio is flowing. Without this, a listener that
+        // connects during dead air parks this task on `rx.recv()`
+        // forever — the disconnect is only noticed at the next write,
+        // which never comes — leaking the task AND the listener count.
+        let (mut rhalf, mut whalf) = sock.split();
+        let mut hangup_buf = [0u8; 512];
+
         if wants_metadata {
             // Per-listener byte counter + last-sent metadata to suppress
             // redundant updates between tracks.
             let mut bytes_since_meta: usize = 0;
             let mut last_meta = String::new();
             'meta: loop {
-                let chunk = match rx.recv().await {
-                    Ok(c) => c,
-                    Err(broadcast::error::RecvError::Lagged(_)) => break 'meta,
-                    Err(broadcast::error::RecvError::Closed) => break 'meta,
+                // Audio outranks the hangup probe: a client that keeps
+                // sending stray bytes must not starve rx.recv() (that
+                // would lag it out of the broadcast ring). A vanished
+                // client is still caught: during dead air recv pends and
+                // the read arm runs; during playback the next write fails.
+                let chunk = tokio::select! {
+                    biased;
+                    recv = rx.recv() => match recv {
+                        Ok(c) => c,
+                        Err(broadcast::error::RecvError::Lagged(_)) => break 'meta,
+                        Err(broadcast::error::RecvError::Closed) => break 'meta,
+                    },
+                    r = rhalf.read(&mut hangup_buf) => match r {
+                        // 0 = clean close; Err = reset. Anything else is
+                        // stray inbound bytes we ignore.
+                        Ok(0) | Err(_) => break 'meta,
+                        Ok(_) => continue 'meta,
+                    },
                 };
                 let mut i = 0usize;
                 while i < chunk.len() {
                     let remaining = ICY_METAINT - bytes_since_meta;
                     let take = remaining.min(chunk.len() - i);
-                    if sock.write_all(&chunk[i..i + take]).await.is_err() {
+                    if whalf.write_all(&chunk[i..i + take]).await.is_err() {
                         break 'meta;
                     }
                     bytes_since_meta += take;
@@ -996,7 +1028,7 @@ async fn handle_connection(
                         } else {
                             vec![0u8]
                         };
-                        if sock.write_all(&block).await.is_err() {
+                        if whalf.write_all(&block).await.is_err() {
                             break 'meta;
                         }
                         bytes_since_meta = 0;
@@ -1004,16 +1036,24 @@ async fn handle_connection(
                 }
             }
         } else {
-            // Plain listener — no metadata interleaving.
+            // Plain listener — no metadata interleaving. Audio outranks
+            // the hangup probe (see the metadata loop above).
             loop {
-                match rx.recv().await {
-                    Ok(chunk) => {
-                        if sock.write_all(&chunk).await.is_err() {
-                            break;
+                tokio::select! {
+                    biased;
+                    recv = rx.recv() => match recv {
+                        Ok(chunk) => {
+                            if whalf.write_all(&chunk).await.is_err() {
+                                break;
+                            }
                         }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => break,
-                    Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Lagged(_)) => break,
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    },
+                    r = rhalf.read(&mut hangup_buf) => match r {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    },
                 }
             }
         }
@@ -1045,16 +1085,27 @@ async fn handle_connection(
 
 fn auth_ok(headers: &str, expected_password: &str) -> bool {
     for line in headers.lines() {
-        let lower = line.to_ascii_lowercase();
-        if let Some(rest) = lower.strip_prefix("authorization:") {
-            let val = rest.trim();
-            if let Some(b64) = val.strip_prefix("basic ") {
-                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64.trim()) {
-                    if let Ok(decoded) = std::str::from_utf8(&bytes) {
-                        if let Some((_user, pass)) = decoded.split_once(':') {
-                            return pass == expected_password;
-                        }
-                    }
+        // Header name and auth scheme are case-insensitive, but the
+        // base64 payload is NOT — lowercasing the whole line (as an
+        // earlier version did) corrupts the credentials and rejects
+        // every source.
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("authorization") {
+            continue;
+        }
+        let val = value.trim();
+        let Some((scheme, b64)) = val.split_once(' ') else {
+            continue;
+        };
+        if !scheme.eq_ignore_ascii_case("basic") {
+            continue;
+        }
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64.trim()) {
+            if let Ok(decoded) = std::str::from_utf8(&bytes) {
+                if let Some((_user, pass)) = decoded.split_once(':') {
+                    return pass == expected_password;
                 }
             }
         }
@@ -1334,6 +1385,210 @@ async fn public_now_playing(State(state): State<Arc<EngineState>>) -> Response {
     .into_response()
 }
 
+// ============================================================================
+// Same-origin listener stream, artwork, and PWA surface
+// ============================================================================
+
+/// How many artwork entries we keep. Track libraries are small
+/// (hundreds, not millions); evicting one arbitrary entry per insert
+/// once full is enough — this endpoint is public, so a wholesale
+/// clear() would let anyone force repeated tag re-parses by cycling
+/// track ids past the cap.
+const ARTWORK_CACHE_CAP: usize = 128;
+
+/// Largest embedded picture we'll serve/cache. Anything bigger is
+/// treated as "no art" — the front-end falls back to generated art,
+/// and one hostile 100 MB APIC frame can't pin server memory.
+const ARTWORK_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Decrements the shared listener counter when the HTTP stream body is
+/// dropped (client disconnected, page closed, network died).
+struct ListenerGuard(Arc<AtomicUsize>);
+
+impl Drop for ListenerGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Same-origin audio stream on the API port. Subscribes to the master
+/// broadcast exactly like a TCP listener on the radio port, but rides
+/// the axum server — so one HTTPS reverse proxy covers page, API, and
+/// audio, and the browser's Web Audio API can analyse the element
+/// without cross-origin restrictions. No ICY interleaving here:
+/// browsers never request it, and the page gets richer metadata over
+/// SSE/WS anyway.
+async fn public_stream(State(state): State<Arc<EngineState>>) -> Response {
+    let snap = state.settings.snapshot();
+    let mut rx = state.tx.subscribe();
+    state.listener_count.fetch_add(1, Ordering::SeqCst);
+    let guard = ListenerGuard(state.listener_count.clone());
+
+    let stream = async_stream::stream! {
+        let _guard = guard;
+        loop {
+            match rx.recv().await {
+                Ok(chunk) => yield Ok::<Bytes, std::io::Error>(chunk),
+                // A lagged listener missed some chunks. MP3 players
+                // resync on the next frame header, so a brief glitch
+                // beats a disconnect.
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", snap.content_type)
+        .header("Cache-Control", "no-store")
+        .header("Access-Control-Allow-Origin", "*")
+        // Tell nginx-style proxies not to buffer the infinite body.
+        .header("X-Accel-Buffering", "no")
+        .body(axum::body::Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Embedded album art for a library track, extracted with lofty (the
+/// same crate that probes tags at upload time). Cached in memory; a
+/// track's art never changes for a given id, so clients may cache hard.
+async fn public_artwork(
+    State(state): State<Arc<EngineState>>,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+) -> Response {
+    if let Ok(cache) = state.artwork_cache.read() {
+        if let Some(hit) = cache.get(&id) {
+            return artwork_response(hit.clone());
+        }
+    }
+
+    let track = state
+        .db
+        .as_ref()
+        .and_then(|db| db.get_track(id).ok().flatten());
+    let art = match track {
+        Some(t) => {
+            let path = PathBuf::from(&t.file_path);
+            tokio::task::spawn_blocking(move || extract_artwork(&path))
+                .await
+                .ok()
+                .flatten()
+        }
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    if let Ok(mut cache) = state.artwork_cache.write() {
+        if cache.len() >= ARTWORK_CACHE_CAP && !cache.contains_key(&id) {
+            // Evict one arbitrary entry instead of clearing: keeps the
+            // steady-state hit rate high for libraries above the cap.
+            if let Some(victim) = cache.keys().next().copied() {
+                cache.remove(&victim);
+            }
+        }
+        cache.insert(id, art.clone());
+    }
+    artwork_response(art)
+}
+
+fn artwork_response(art: Option<(String, Bytes)>) -> Response {
+    match art {
+        Some((mime, data)) => Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", mime)
+            .header("Cache-Control", "public, max-age=86400, immutable")
+            .body(axum::body::Body::from(data))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Pull the front cover (or failing that, any picture) out of a track's
+/// tags. Returns (mime, bytes).
+fn extract_artwork(path: &std::path::Path) -> Option<(String, Bytes)> {
+    use lofty::file::TaggedFileExt;
+    use lofty::picture::PictureType;
+    use lofty::probe::Probe;
+
+    let tagged = Probe::open(path).ok()?.guess_file_type().ok()?.read().ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    let pics = tag.pictures();
+    let pic = pics
+        .iter()
+        .find(|p| p.pic_type() == PictureType::CoverFront)
+        .or_else(|| pics.first())?;
+    if pic.data().len() > ARTWORK_MAX_BYTES {
+        return None;
+    }
+    let mime = pic
+        .mime_type()
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "image/jpeg".to_string());
+    Some((mime, Bytes::copy_from_slice(pic.data())))
+}
+
+/// Web-app manifest so the station is installable to a phone's home
+/// screen. Name comes from the live settings, so a rename is picked up
+/// without a rebuild.
+async fn public_manifest(State(state): State<Arc<EngineState>>) -> Response {
+    let snap = state.settings.snapshot();
+    let manifest = serde_json::json!({
+        "name": snap.stream_name,
+        "short_name": snap.stream_name,
+        "description": "Live 24/7 radio",
+        "start_url": "/radio",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#07090d",
+        "theme_color": "#07090d",
+        "icons": [{
+            "src": "/radio/icon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        }]
+    });
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/manifest+json")
+        .header("Cache-Control", "public, max-age=300")
+        .body(axum::body::Body::from(manifest.to_string()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Generated station icon: dark tile, amber signal arcs, station
+/// initial. SVG scales to every icon slot the OS asks for.
+async fn public_icon(State(state): State<Arc<EngineState>>) -> Response {
+    let snap = state.settings.snapshot();
+    let initial: String = snap
+        .stream_name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "N".to_string());
+    let initial = html_escape_min(&initial);
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<rect width="128" height="128" rx="28" fill="#07090d"/>
+<circle cx="64" cy="72" r="7" fill="#f5a524"/>
+<path d="M44 56a26 26 0 0 1 40 0" fill="none" stroke="#f5a524" stroke-width="6" stroke-linecap="round"/>
+<path d="M32 44a42 42 0 0 1 64 0" fill="none" stroke="#f5a524" stroke-width="6" stroke-linecap="round" opacity="0.55"/>
+<text x="64" y="112" font-family="Arial, sans-serif" font-size="26" font-weight="bold" fill="#e8edf2" text-anchor="middle">{}</text>
+</svg>"##,
+        initial
+    );
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "image/svg+xml")
+        .header("Cache-Control", "public, max-age=86400")
+        .body(axum::body::Body::from(svg))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Minimal escaping for text interpolated into generated SVG/HTML.
+fn html_escape_min(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 #[derive(Template)]
 #[template(path = "public_listen.html")]
 struct PublicListenPage {
@@ -1468,11 +1723,13 @@ async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::Cancellatio
         None => return,
     };
 
-    // If the PCM-mixed crossfade pipeline fails to spawn (e.g. ffmpeg
-    // missing or the encoder dies), we record that here and stop trying
-    // to spawn it again — every subsequent pass falls through to the
-    // per-track raw pacer below.
-    let mut mixer_disabled = false;
+    // If the PCM-mixed crossfade pipeline fails (e.g. ffmpeg missing or
+    // the encoder dies), we back off to the per-track raw pacer — but
+    // only until this deadline passes. A transient failure (OOM kill,
+    // ffmpeg upgrade mid-flight) must not degrade the station until the
+    // next restart.
+    const MIXER_RETRY_SECS: u64 = 300;
+    let mut mixer_retry_at: Option<tokio::time::Instant> = None;
 
     loop {
         if shutdown.is_cancelled() {
@@ -1549,22 +1806,26 @@ async fn autodj_loop(state: EngineState, shutdown: tokio_util::sync::Cancellatio
         // mixed sample-wise across the crossfade window. Falls through
         // to the per-track raw pacer if the pipeline can't be started.
         let xf = state.settings.snapshot().crossfade_seconds;
-        if xf > 0 && !mixer_disabled {
+        let mixer_backed_off = mixer_retry_at.is_some_and(|t| tokio::time::Instant::now() < t);
+        if xf > 0 && !mixer_backed_off {
             match mixer::run_crossfaded_autodj(state.clone()).await {
                 Ok(()) => {
                     // Mixer returned cleanly — preemption, schedule
                     // change, or empty library. Re-enter the outer
                     // loop, which will sleep on preemption or re-pick
                     // the queue for the next mixed pass.
+                    mixer_retry_at = None;
                     tokio::time::sleep(Duration::from_millis(250)).await;
                     continue;
                 }
                 Err(e) => {
                     eprintln!(
-                        "[autodj] crossfade pipeline failed ({}); falling back to per-track pacer",
-                        e
+                        "[autodj] crossfade pipeline failed ({}); per-track pacer for {}s, then retrying",
+                        e, MIXER_RETRY_SECS
                     );
-                    mixer_disabled = true;
+                    mixer_retry_at = Some(
+                        tokio::time::Instant::now() + Duration::from_secs(MIXER_RETRY_SECS),
+                    );
                 }
             }
         }
@@ -2708,10 +2969,15 @@ fn current_icy_title(state: &EngineState) -> String {
 
 /// Build the byte sequence for one ICY metadata block:
 /// `[length/16] StreamTitle='<title>';\0\0...` padded to a 16-byte
-/// boundary. Single quotes inside the title are stripped because
-/// they'd unbalance the StreamTitle delimiters.
+/// boundary. ASCII single quotes would unbalance the StreamTitle
+/// delimiters and there is no escaping convention every client agrees
+/// on, so we substitute the typographic apostrophe — visually identical
+/// in players, no dropped characters.
 fn encode_icy_metadata(title: &str) -> Vec<u8> {
-    let safe_title: String = title.chars().filter(|c| *c != '\'').collect();
+    let safe_title: String = title
+        .chars()
+        .map(|c| if c == '\'' { '\u{2019}' } else { c })
+        .collect();
     let mut payload = format!("StreamTitle='{}';", safe_title).into_bytes();
     // Per spec: each block is `(len/16) blocks of 16 bytes`. Round up.
     let len = payload.len();
@@ -2818,6 +3084,25 @@ pub fn validate_presenter_url(s: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_ok_accepts_real_basic_credentials() {
+        // base64("source:hackme") — mixed case, as every client sends it.
+        let headers = "PUT /listen.mp3 HTTP/1.1\r\nAuthorization: Basic c291cmNlOmhhY2ttZQ==\r\n";
+        assert!(auth_ok(headers, "hackme"));
+        // Header name and scheme are case-insensitive per RFC 7230/7235.
+        let headers = "authorization: BASIC c291cmNlOmhhY2ttZQ==\r\n";
+        assert!(auth_ok(headers, "hackme"));
+    }
+
+    #[test]
+    fn auth_ok_rejects_wrong_or_garbage_credentials() {
+        let headers = "Authorization: Basic c291cmNlOmhhY2ttZQ==\r\n";
+        assert!(!auth_ok(headers, "different-password"));
+        assert!(!auth_ok("Authorization: Basic !!!notbase64!!!\r\n", "hackme"));
+        assert!(!auth_ok("Authorization: Bearer sometoken\r\n", "hackme"));
+        assert!(!auth_ok("", "hackme"));
+    }
 
     #[test]
     fn parse_track_ids_basic() {

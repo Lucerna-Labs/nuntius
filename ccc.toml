@@ -30,6 +30,10 @@ enabled = [
     "analytics",
     "bridge",
     "ads",
+    # Listener-facing chat rail on /radio + dead-air watchdog for the
+    # 24/7 stream.
+    "live-chat",
+    "stream-watch",
 ]
 
 # Per-plugin configuration goes under [plugin.<name>]. Plugins read the

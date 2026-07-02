@@ -1,0 +1,9 @@
+engine_url = "http://127.0.0.1:8000"
+mount_path = "/listen.mp3"
+tick_seconds = 10
+stale_seconds = 90
+min_bytes_per_tick = 4000
+max_failed_probes = 3
+alert_cooldown_seconds = 300
+discord_webhook_url = ""
+generic_webhook_url = ""

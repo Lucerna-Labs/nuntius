@@ -1,0 +1,240 @@
+/* ============================================================================
+   Nuntius public theme — "midnight transmission"
+   Shared token layer + base components for every PUBLIC page (radio, home,
+   blog, podcasts, video). Admin pages keep admin.css; public pages must NOT
+   link the admin stylesheet.
+
+   Served at /assets/public.css by the CMS plugin.
+   ============================================================================ */
+
+:root {
+  /* Surfaces — deep blue-black studio, panels lift with a faint blue cast */
+  --bg-deep: #07090d;
+  --bg-panel: #0d1218;
+  --bg-raise: #131a22;
+  --line: #1e2733;
+  --line-bright: #2c3947;
+
+  /* Ink */
+  --ink: #e9eef4;
+  --ink-dim: #8b98a5;
+  --ink-faint: #5c6874;
+
+  /* Signals — amber is the station's voltage; phosphor teal is telemetry */
+  --signal: #f5a524;
+  --signal-hot: #ffc14d;
+  --signal-ink: #16110a;
+  --phosphor: #3ddbc4;
+  --live: #ff5252;
+
+  /* Type */
+  --font-display: "Unbounded", "Arial Black", sans-serif;
+  --font-body: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+
+  --radius: 10px;
+  --radius-lg: 16px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--bg-deep);
+  color: var(--ink);
+  font: 16px/1.6 var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Atmosphere: a slow amber glow low on the page + fine grain so large
+   dark areas don't band. Both are pointer-transparent. */
+body.nuntius-public {
+  background:
+    radial-gradient(1200px 500px at 80% -10%, rgba(61, 219, 196, 0.05), transparent 60%),
+    radial-gradient(1000px 600px at 10% 110%, rgba(245, 165, 36, 0.06), transparent 55%),
+    var(--bg-deep);
+}
+body.nuntius-public::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.35;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+  z-index: 0;
+}
+body.nuntius-public > * { position: relative; z-index: 1; }
+
+a { color: var(--phosphor); text-decoration: none; }
+a:hover { color: var(--ink); }
+
+::selection { background: rgba(245, 165, 36, 0.35); }
+
+h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing: 0.01em; }
+
+/* === Shared header ======================================================= */
+.pub-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 0;
+}
+.pub-brand {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+.pub-brand:hover { color: var(--signal-hot); }
+.pub-nav { display: flex; gap: 4px; flex-wrap: wrap; }
+.pub-nav a {
+  color: var(--ink-dim);
+  font-size: 14px;
+  padding: 8px 13px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.pub-nav a:hover { color: var(--ink); border-color: var(--line-bright); }
+.pub-nav a[aria-current="page"] {
+  color: var(--signal-hot);
+  border-color: rgba(245, 165, 36, 0.35);
+  background: rgba(245, 165, 36, 0.07);
+}
+
+/* === Buttons ============================================================= */
+.pub-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid var(--line-bright);
+  background: transparent;
+  color: var(--ink);
+  font: 600 14px/1 var(--font-body);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+.pub-btn:hover { border-color: var(--ink-dim); }
+.pub-btn:active { transform: translateY(1px); }
+.pub-btn.primary {
+  background: var(--signal);
+  border-color: var(--signal);
+  color: var(--signal-ink);
+  box-shadow: 0 0 24px rgba(245, 165, 36, 0.25);
+}
+.pub-btn.primary:hover { background: var(--signal-hot); border-color: var(--signal-hot); }
+
+/* === Cards & sections ==================================================== */
+.pub-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.pub-card:hover { border-color: var(--line-bright); }
+
+.pub-section { margin-top: 48px; }
+.pub-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.pub-section-head h2 { margin: 0; font-size: 20px; }
+.pub-section-head a { font-size: 13px; color: var(--ink-dim); }
+.pub-section-head a:hover { color: var(--phosphor); }
+
+.pub-kicker {
+  font: 500 11px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.pub-empty {
+  color: var(--ink-dim);
+  border: 1px dashed var(--line-bright);
+  border-radius: var(--radius);
+  padding: 20px;
+  font-size: 14px;
+}
+
+/* === Telemetry (mono readouts) =========================================== */
+.pub-readout {
+  font: 500 12px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--phosphor);
+}
+
+/* ON AIR lamp: amber when the AutoDJ transmits, hot red for live source */
+.onair {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: 600 11px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  color: var(--ink-dim);
+}
+.onair .lamp {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+.onair.is-on { color: var(--signal-hot); }
+.onair.is-on .lamp {
+  background: var(--signal);
+  box-shadow: 0 0 10px 2px rgba(245, 165, 36, 0.55);
+  animation: lamp-breathe 2.4s ease-in-out infinite;
+}
+.onair.is-live { color: var(--live); }
+.onair.is-live .lamp {
+  background: var(--live);
+  box-shadow: 0 0 10px 2px rgba(255, 82, 82, 0.55);
+  animation: lamp-breathe 1.2s ease-in-out infinite;
+}
+@keyframes lamp-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* === Footer ============================================================== */
+.pub-footer {
+  margin-top: 72px;
+  padding: 28px 0 40px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+.pub-footer a { color: var(--ink-dim); }
+.pub-footer a:hover { color: var(--phosphor); }
+
+/* === Layout container ==================================================== */
+.pub-wrap { max-width: 1180px; margin: 0 auto; padding: 0 22px; }
+
+@media (max-width: 720px) {
+  .pub-top { flex-direction: column; align-items: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
