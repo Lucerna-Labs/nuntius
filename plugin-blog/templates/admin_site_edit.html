@@ -1,0 +1,74 @@
+{% extends "_admin_layout.html" %}
+
+{% block title %}{{ heading }} — Blogs — Nuntius{% endblock %}
+
+{% block content %}
+<header class="cms-page__header">
+  <h1>{{ heading }}</h1>
+  {% match error %}
+    {% when Some with (msg) %}
+      <div class="cms-alert cms-alert--error">{{ msg }}</div>
+    {% when None %}
+  {% endmatch %}
+</header>
+
+<form method="post" action="{{ form_action }}" class="cms-form" style="max-width:720px">
+  <label class="cms-field">
+    <span class="cms-field__label">Blog name</span>
+    <input class="cms-field__input" type="text" name="name" required value="{{ name }}" placeholder="e.g. Field Notes" autofocus>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Blog slug</span>
+    <input class="cms-field__input" type="text" name="slug" value="{{ slug }}"
+           pattern="[a-z0-9-]*" title="Lowercase letters, digits, and hyphens only."
+           placeholder="auto-generated from name if blank">
+    <span class="cms-field__hint">Always previewable at <code>/sites/{{ slug_or_placeholder }}/</code> even before DNS is configured.</span>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Domains &amp; subdomains (one per line or comma-separated)</span>
+    <textarea class="cms-field__input" name="hosts" rows="3" placeholder="notes.yourdomain.com&#10;myotherdomain.com">{{ hosts_text }}</textarea>
+    <span class="cms-field__hint">Any HTTP request arriving with one of these <code>Host</code> headers serves this blog at <code>/</code>.</span>
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Description</span>
+    <input class="cms-field__input" type="text" name="description" value="{{ description }}" placeholder="Short tagline shown on the blog homepage">
+  </label>
+
+  <label class="cms-field">
+    <span class="cms-field__label">Accent theme</span>
+    <select class="cms-field__input" name="theme">
+      <option value="signal" {% if theme == "signal" %}selected{% endif %}>Signal Amber</option>
+      <option value="phosphor" {% if theme == "phosphor" %}selected{% endif %}>Phosphor Teal</option>
+      <option value="ink" {% if theme == "ink" %}selected{% endif %}>Electric Blue</option>
+    </select>
+  </label>
+
+  <div style="display:flex; gap:8px; align-items:center;">
+    <button class="cms-btn cms-btn--primary" type="submit">Save blog</button>
+    <a class="cms-btn" href="/admin/blog/posts" style="display:inline-flex; align-items:center; padding:10px 16px;">Cancel</a>
+  </div>
+</form>
+
+{% match delete_action %}
+  {% when Some with (del_url) %}
+    <form method="post" action="{{ del_url }}" style="margin-top:24px; max-width:720px; padding-top:16px; border-top:1px solid var(--border, #2a3038);"
+          onsubmit="return confirm('Delete blog “{{ name }}” and ALL of its posts?')">
+      <button class="cms-btn cms-btn--danger" type="submit">Delete blog &amp; its posts</button>
+    </form>
+  {% when None %}
+{% endmatch %}
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Multi-domain routing</h3>
+  <ul class="cms-rail__list">
+    <li>Point any domain or subdomain DNS record to your VPS and add it to Nginx (<code>server_name</code>) proxying to Nuntius.</li>
+    <li>List the domain(s) here — Nuntius routes by the <code>Host</code> header automatically.</li>
+    <li>Each blog has its own isolated post slugs, so two blogs can both have a <code>welcome</code> post.</li>
+  </ul>
+</div>
+{% endblock %}

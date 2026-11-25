@@ -28,6 +28,8 @@ members = [
     "ccc-plugin-seo",
     "ccc-plugin-theme-dark-matter",
     "ccc-plugin-whisper",
+    "ccc-plugin-craft-studio",
+    "ccc-plugin-mail",
 ]
 
 resolver = "2"

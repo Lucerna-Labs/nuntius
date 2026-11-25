@@ -86,6 +86,16 @@ pub fn register_by_name(
             let plugin = ccc_plugin_whisper::CccPluginWhisperPlugin::from_config(cfg)?;
             manager.register(plugin)?;
         }
+        "wordcraft" => {
+            manager.register(ccc_plugin_craft_studio::WordCraftPlugin::from_config(cfg))?;
+        }
+        "pdfcraft" => {
+            manager.register(ccc_plugin_craft_studio::PdfCraftPlugin::from_config(cfg))?;
+        }
+        "mail" => {
+            let plugin = ccc_plugin_mail::MailPlugin::from_config(cfg)?;
+            manager.register(plugin)?;
+        }
         other => return Err(DispatchError::Unknown(other.to_string())),
     }
     Ok(())
@@ -113,6 +123,9 @@ pub fn known_plugins() -> &'static [&'static str] {
         "live-chat",
         "theme-dark-matter",
         "whisper",
+        "wordcraft",
+        "pdfcraft",
+        "mail",
     ]
 }
 

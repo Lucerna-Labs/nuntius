@@ -17,8 +17,26 @@ const BLOG_POSTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("blog
 const BLOG_POSTS_CHRONO_INDEX: TableDefinition<&str, u64> =
     TableDefinition::new("blog_posts_chrono");
 
-/// Slug → ID lookup. Slugs must be unique across all posts (drafts included).
+/// Slug → ID lookup for the default (legacy) blog site (site_id = 0).
 const BLOG_POSTS_SLUG_INDEX: TableDefinition<&str, u64> = TableDefinition::new("blog_posts_slug");
+
+/// Blog sites (multi-domain / multi-subdomain blogs).
+/// Key: Site ID (u64, >= 1; 0 is reserved for the legacy default blog).
+/// Value: JSON-serialized `BlogSite`.
+const BLOG_SITES_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("blog_sites");
+
+/// Site slug → Site ID lookup (unique across all blog sites).
+const BLOG_SITE_SLUG_INDEX: TableDefinition<&str, u64> = TableDefinition::new("blog_site_slug");
+
+/// Normalized domain/subdomain host → Site ID lookup (unique across all blog sites).
+const BLOG_SITE_HOST_INDEX: TableDefinition<&str, u64> = TableDefinition::new("blog_site_host");
+
+/// Post ID → Site ID mapping. Absent entries belong to site_id = 0 (legacy default).
+const BLOG_POST_SITE_MAP: TableDefinition<u64, u64> = TableDefinition::new("blog_post_site_map");
+
+/// Per-site slug → Post ID lookup. Allows distinct blogs to reuse the same post slugs.
+const BLOG_POST_SITE_SLUG_INDEX: TableDefinition<(u64, &str), u64> =
+    TableDefinition::new("blog_post_site_slug");
 
 /// Transcription jobs (Whisper plugin).
 /// Key: Job ID (u64 == unix-second creation time)
@@ -119,6 +137,52 @@ fn decode<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T, Error> {
 
 fn encode<T: serde::Serialize>(val: &T) -> Result<Vec<u8>, Error> {
     bincode::serialize(val).map_err(|e| Error::Corrupted(format!("bincode encode: {e}")))
+}
+
+fn decode_json<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T, Error> {
+    serde_json::from_slice(raw)
+        .map_err(|e| Error::Corrupted(format!("json decode ({} bytes): {e}", raw.len())))
+}
+
+fn encode_json<T: serde::Serialize>(val: &T) -> Result<Vec<u8>, Error> {
+    serde_json::to_vec(val).map_err(|e| Error::Corrupted(format!("json encode: {e}")))
+}
+
+fn default_blog_theme() -> String {
+    "signal".into()
+}
+
+/// Normalize a domain or subdomain host string for storage and matching:
+/// trims whitespace, strips scheme (`http://`/`https://`), strips any path
+/// or port, lowercases, and strips trailing dots.
+pub fn normalize_host(raw: &str) -> String {
+    let lower = raw.trim().to_ascii_lowercase();
+    let s = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(&lower);
+    let s = s.split('/').next().unwrap_or("");
+    let s = s.split(':').next().unwrap_or("");
+    s.trim_end_matches('.').to_string()
+}
+
+/// A distinct blog site mapped to one or more domains or subdomains.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BlogSite {
+    pub id: u64,
+    pub name: String,
+    /// URL-safe identifier used for `/sites/:slug/` preview/path access.
+    pub slug: String,
+    /// Normalized hostnames routed to this blog (e.g. `notes.lucernamedia.com`, `myblog.org`).
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    #[serde(default)]
+    pub description: String,
+    /// Visual accent theme: `"signal"`, `"phosphor"`, or `"ink"`.
+    #[serde(default = "default_blog_theme")]
+    pub theme: String,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 /// Publication state of a blog post.
@@ -441,6 +505,11 @@ impl CccDB {
             write_txn.open_table(BLOG_POSTS_TABLE)?;
             write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
             write_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
+            write_txn.open_table(BLOG_SITES_TABLE)?;
+            write_txn.open_table(BLOG_SITE_SLUG_INDEX)?;
+            write_txn.open_table(BLOG_SITE_HOST_INDEX)?;
+            write_txn.open_table(BLOG_POST_SITE_MAP)?;
+            write_txn.open_table(BLOG_POST_SITE_SLUG_INDEX)?;
             write_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
             write_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
             write_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
@@ -481,25 +550,204 @@ impl CccDB {
         Ok(next)
     }
 
+    // --- BLOG SITES (MULTI-DOMAIN / MULTI-SUBDOMAIN) ---
+
+    /// Insert or update a blog site. Enforces unique `slug` and unique
+    /// normalized hostnames across all sites.
+    pub fn upsert_blog_site(&self, site: &BlogSite) -> Result<(), Error> {
+        if site.id == 0 {
+            return Err(Error::Corrupted(
+                "blog site id 0 is reserved for the legacy default blog".into(),
+            ));
+        }
+        let slug = site.slug.trim().to_ascii_lowercase();
+        if slug.is_empty() {
+            return Err(Error::Corrupted("blog site slug cannot be empty".into()));
+        }
+
+        let mut normalized_hosts = Vec::new();
+        for h in &site.hosts {
+            let n = normalize_host(h);
+            if !n.is_empty() && !normalized_hosts.contains(&n) {
+                normalized_hosts.push(n);
+            }
+        }
+
+        let mut clean = site.clone();
+        clean.slug = slug;
+        clean.hosts = normalized_hosts;
+
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut sites_table = write_txn.open_table(BLOG_SITES_TABLE)?;
+            let mut slug_table = write_txn.open_table(BLOG_SITE_SLUG_INDEX)?;
+            let mut host_table = write_txn.open_table(BLOG_SITE_HOST_INDEX)?;
+
+            if let Some(existing_id) = slug_table.get(clean.slug.as_str())? {
+                if existing_id.value() != clean.id {
+                    return Err(Error::Corrupted(format!(
+                        "blog site slug '{}' already in use by site {}",
+                        clean.slug,
+                        existing_id.value()
+                    )));
+                }
+            }
+            for host in &clean.hosts {
+                if let Some(existing_id) = host_table.get(host.as_str())? {
+                    if existing_id.value() != clean.id {
+                        return Err(Error::Corrupted(format!(
+                            "domain '{}' is already assigned to another blog (site {})",
+                            host,
+                            existing_id.value()
+                        )));
+                    }
+                }
+            }
+
+            // Clean up previous slug and host bindings if updating an existing site.
+            if let Some(prev_raw) = sites_table.get(clean.id)? {
+                let prev: BlogSite = decode_json(prev_raw.value())?;
+                if prev.slug != clean.slug {
+                    slug_table.remove(prev.slug.as_str())?;
+                }
+                for old_host in &prev.hosts {
+                    if !clean.hosts.contains(old_host) {
+                        host_table.remove(old_host.as_str())?;
+                    }
+                }
+            }
+
+            let encoded = encode_json(&clean)?;
+            sites_table.insert(clean.id, encoded.as_slice())?;
+            slug_table.insert(clean.slug.as_str(), clean.id)?;
+            for host in &clean.hosts {
+                host_table.insert(host.as_str(), clean.id)?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Delete a blog site and all posts assigned to it.
+    pub fn delete_blog_site(&self, id: u64) -> Result<(), Error> {
+        let post_ids: Vec<u64> = self
+            .all_blog_posts_for_site(id)?
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        for pid in post_ids {
+            self.delete_blog_post(pid)?;
+        }
+
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut sites_table = write_txn.open_table(BLOG_SITES_TABLE)?;
+            let mut slug_table = write_txn.open_table(BLOG_SITE_SLUG_INDEX)?;
+            let mut host_table = write_txn.open_table(BLOG_SITE_HOST_INDEX)?;
+
+            if let Some(prev_raw) = sites_table.get(id)? {
+                let prev: BlogSite = decode_json(prev_raw.value())?;
+                slug_table.remove(prev.slug.as_str())?;
+                for host in &prev.hosts {
+                    host_table.remove(host.as_str())?;
+                }
+            }
+            sites_table.remove(id)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Get a blog site by id.
+    pub fn get_blog_site(&self, id: u64) -> Result<Option<BlogSite>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(BLOG_SITES_TABLE)?;
+        table
+            .get(id)?
+            .map(|raw| decode_json(raw.value()))
+            .transpose()
+    }
+
+    /// Get a blog site by its URL slug.
+    pub fn get_blog_site_by_slug(&self, slug: &str) -> Result<Option<BlogSite>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let slug_table = read_txn.open_table(BLOG_SITE_SLUG_INDEX)?;
+        let sites_table = read_txn.open_table(BLOG_SITES_TABLE)?;
+        let key = slug.trim().to_ascii_lowercase();
+        let id = match slug_table.get(key.as_str())? {
+            Some(v) => v.value(),
+            None => return Ok(None),
+        };
+        sites_table
+            .get(id)?
+            .map(|raw| decode_json(raw.value()))
+            .transpose()
+    }
+
+    /// Get a blog site matching an incoming HTTP `Host` header value.
+    pub fn get_blog_site_by_host(&self, raw_host: &str) -> Result<Option<BlogSite>, Error> {
+        let host = normalize_host(raw_host);
+        if host.is_empty() {
+            return Ok(None);
+        }
+        let read_txn = self.db.begin_read()?;
+        let host_table = read_txn.open_table(BLOG_SITE_HOST_INDEX)?;
+        let sites_table = read_txn.open_table(BLOG_SITES_TABLE)?;
+        let id = match host_table.get(host.as_str())? {
+            Some(v) => v.value(),
+            None => return Ok(None),
+        };
+        sites_table
+            .get(id)?
+            .map(|raw| decode_json(raw.value()))
+            .transpose()
+    }
+
+    /// All configured blog sites, ordered by name.
+    pub fn all_blog_sites(&self) -> Result<Vec<BlogSite>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(BLOG_SITES_TABLE)?;
+        let mut out: Vec<BlogSite> = table
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| decode_json(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
+        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(out)
+    }
+
+    /// Return the `site_id` owning `post_id` (0 = legacy default blog).
+    pub fn get_blog_post_site_id(&self, post_id: u64) -> Result<u64, Error> {
+        let read_txn = self.db.begin_read()?;
+        let map = read_txn.open_table(BLOG_POST_SITE_MAP)?;
+        Ok(map.get(post_id)?.map(|v| v.value()).unwrap_or(0))
+    }
+
     // --- BLOG POSTS ---
 
     fn chrono_key(published_at: u64, id: u64) -> String {
         format!("{:020}_{}", published_at, id)
     }
 
-    /// Insert or update a blog post. Maintains slug uniqueness (rejects
-    /// inserts whose slug is taken by another id) and keeps the chrono
-    /// index synchronized with `status`: Published posts are indexed,
-    /// Drafts are not.
+    /// Insert or update a blog post on the default blog site (`site_id = 0`).
     pub fn upsert_blog_post(&self, post: &BlogPost) -> Result<(), Error> {
+        self.upsert_blog_post_for_site(0, post)
+    }
+
+    /// Insert or update a blog post on a specific `site_id` (0 = legacy default blog).
+    /// Enforces slug uniqueness *within* that site (allowing distinct blogs to reuse slugs)
+    /// and keeps the chrono index synchronized with `status`.
+    pub fn upsert_blog_post_for_site(&self, site_id: u64, post: &BlogPost) -> Result<(), Error> {
         let write_txn = self.db.begin_write()?;
         {
             let mut main_table = write_txn.open_table(BLOG_POSTS_TABLE)?;
             let mut chrono_table = write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
             let mut slug_table = write_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
+            let mut site_map = write_txn.open_table(BLOG_POST_SITE_MAP)?;
+            let mut site_slug_table = write_txn.open_table(BLOG_POST_SITE_SLUG_INDEX)?;
 
-            // Slug uniqueness: if some other id already owns this slug, refuse.
-            if let Some(existing_id) = slug_table.get(post.slug.as_str())? {
+            // Per-site slug uniqueness: if another post in the same site owns this slug, refuse.
+            if let Some(existing_id) = site_slug_table.get((site_id, post.slug.as_str()))? {
                 if existing_id.value() != post.id {
                     return Err(Error::Corrupted(format!(
                         "blog slug '{}' already in use by post {}",
@@ -508,13 +756,28 @@ impl CccDB {
                     )));
                 }
             }
+            if site_id == 0 {
+                if let Some(existing_id) = slug_table.get(post.slug.as_str())? {
+                    if existing_id.value() != post.id {
+                        return Err(Error::Corrupted(format!(
+                            "blog slug '{}' already in use by post {}",
+                            post.slug,
+                            existing_id.value()
+                        )));
+                    }
+                }
+            }
 
-            // Drop any stale row+indexes for this id (handles slug renames
-            // and status flips cleanly).
+            // Drop any stale row+indexes for this id (handles slug renames,
+            // site moves, and status flips cleanly).
+            let prev_site_id = site_map.get(post.id)?.map(|v| v.value()).unwrap_or(0);
             if let Some(prev_raw) = main_table.get(post.id)? {
                 let prev: BlogPost = decode(prev_raw.value())?;
-                if prev.slug != post.slug {
-                    slug_table.remove(prev.slug.as_str())?;
+                if prev.slug != post.slug || prev_site_id != site_id {
+                    site_slug_table.remove((prev_site_id, prev.slug.as_str()))?;
+                    if prev_site_id == 0 {
+                        slug_table.remove(prev.slug.as_str())?;
+                    }
                 }
                 if let Some(ts) = prev.published_at {
                     chrono_table.remove(Self::chrono_key(ts, prev.id).as_str())?;
@@ -523,7 +786,11 @@ impl CccDB {
 
             let encoded: Vec<u8> = encode(post)?;
             main_table.insert(post.id, encoded.as_slice())?;
-            slug_table.insert(post.slug.as_str(), post.id)?;
+            site_map.insert(post.id, site_id)?;
+            site_slug_table.insert((site_id, post.slug.as_str()), post.id)?;
+            if site_id == 0 {
+                slug_table.insert(post.slug.as_str(), post.id)?;
+            }
 
             if post.status == PostStatus::Published {
                 if let Some(ts) = post.published_at {
@@ -542,14 +809,21 @@ impl CccDB {
             let mut main_table = write_txn.open_table(BLOG_POSTS_TABLE)?;
             let mut chrono_table = write_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
             let mut slug_table = write_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
+            let mut site_map = write_txn.open_table(BLOG_POST_SITE_MAP)?;
+            let mut site_slug_table = write_txn.open_table(BLOG_POST_SITE_SLUG_INDEX)?;
 
+            let prev_site_id = site_map.get(id)?.map(|v| v.value()).unwrap_or(0);
             if let Some(prev_raw) = main_table.get(id)? {
                 let prev: BlogPost = decode(prev_raw.value())?;
-                slug_table.remove(prev.slug.as_str())?;
+                site_slug_table.remove((prev_site_id, prev.slug.as_str()))?;
+                if prev_site_id == 0 {
+                    slug_table.remove(prev.slug.as_str())?;
+                }
                 if let Some(ts) = prev.published_at {
                     chrono_table.remove(Self::chrono_key(ts, prev.id).as_str())?;
                 }
             }
+            site_map.remove(id)?;
             main_table.remove(id)?;
         }
         write_txn.commit()?;
@@ -563,14 +837,29 @@ impl CccDB {
         table.get(id)?.map(|raw| decode(raw.value())).transpose()
     }
 
-    /// Single post by slug.
+    /// Single post by slug on the legacy default blog (`site_id = 0`).
     pub fn get_blog_post_by_slug(&self, slug: &str) -> Result<Option<BlogPost>, Error> {
+        self.get_blog_post_by_site_and_slug(0, slug)
+    }
+
+    /// Single post by `(site_id, slug)`. For `site_id == 0`, falls back to the
+    /// legacy `BLOG_POSTS_SLUG_INDEX` so pre-multisite rows remain readable.
+    pub fn get_blog_post_by_site_and_slug(
+        &self,
+        site_id: u64,
+        slug: &str,
+    ) -> Result<Option<BlogPost>, Error> {
         let read_txn = self.db.begin_read()?;
-        let slug_table = read_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
+        let site_slug_table = read_txn.open_table(BLOG_POST_SITE_SLUG_INDEX)?;
+        let legacy_slug_table = read_txn.open_table(BLOG_POSTS_SLUG_INDEX)?;
         let main_table = read_txn.open_table(BLOG_POSTS_TABLE)?;
 
-        let id = match slug_table.get(slug)? {
+        let id = match site_slug_table.get((site_id, slug))? {
             Some(v) => v.value(),
+            None if site_id == 0 => match legacy_slug_table.get(slug)? {
+                Some(v) => v.value(),
+                None => return Ok(None),
+            },
             None => return Ok(None),
         };
         main_table
@@ -579,7 +868,7 @@ impl CccDB {
             .transpose()
     }
 
-    /// Most-recent Published posts for the public reader.
+    /// Most-recent Published posts across all blogs.
     pub fn latest_published_blog_posts(&self, limit: usize) -> Result<Vec<BlogPost>, Error> {
         let read_txn = self.db.begin_read()?;
         let chrono_table = read_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
@@ -595,8 +884,35 @@ impl CccDB {
         Ok(out)
     }
 
-    /// Every post (drafts + published), newest-row first by id.
-    /// Used by the admin list view.
+    /// Most-recent Published posts for a single `site_id` (0 = legacy default blog).
+    pub fn latest_published_blog_posts_for_site(
+        &self,
+        site_id: u64,
+        limit: usize,
+    ) -> Result<Vec<BlogPost>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let chrono_table = read_txn.open_table(BLOG_POSTS_CHRONO_INDEX)?;
+        let main_table = read_txn.open_table(BLOG_POSTS_TABLE)?;
+        let site_map = read_txn.open_table(BLOG_POST_SITE_MAP)?;
+
+        let mut out = Vec::new();
+        for item in chrono_table.range("0"..="9")?.rev() {
+            if out.len() >= limit {
+                break;
+            }
+            let (_, id) = item?;
+            let pid = id.value();
+            let owner = site_map.get(pid)?.map(|v| v.value()).unwrap_or(0);
+            if owner == site_id {
+                if let Some(raw) = main_table.get(pid)? {
+                    out.push(decode(raw.value())?);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every post (drafts + published) across all sites, newest first.
     pub fn all_blog_posts(&self) -> Result<Vec<BlogPost>, Error> {
         let read_txn = self.db.begin_read()?;
         let main_table = read_txn.open_table(BLOG_POSTS_TABLE)?;
@@ -606,7 +922,24 @@ impl CccDB {
             .filter_map(|r| r.ok())
             .map(|(_, v)| decode(v.value()))
             .collect::<Result<Vec<_>, _>>()?;
-        // Newest first by updated_at.
+        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(out)
+    }
+
+    /// Every post (drafts + published) belonging to a single `site_id`, newest first.
+    pub fn all_blog_posts_for_site(&self, site_id: u64) -> Result<Vec<BlogPost>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let main_table = read_txn.open_table(BLOG_POSTS_TABLE)?;
+        let site_map = read_txn.open_table(BLOG_POST_SITE_MAP)?;
+
+        let mut out: Vec<BlogPost> = Vec::new();
+        for item in main_table.iter()? {
+            let (id, raw) = item?;
+            let owner = site_map.get(id.value())?.map(|v| v.value()).unwrap_or(0);
+            if owner == site_id {
+                out.push(decode(raw.value())?);
+            }
+        }
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(out)
     }
@@ -1474,6 +1807,76 @@ mod tests {
         assert_eq!(db.listener_samples(0, 10_000).unwrap(), vec![(180, 3)]);
         // Nothing left to prune below the cutoff.
         assert_eq!(db.prune_listener_samples(180).unwrap(), 0);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn multisite_blog_host_lookup_and_reusable_slugs() {
+        let path = tmp_path("multisite_blog");
+        let db = CccDB::new(path.to_string_lossy().as_ref()).unwrap();
+
+        let site_a = BlogSite {
+            id: 1,
+            name: "Field Notes".into(),
+            slug: "field-notes".into(),
+            hosts: vec!["HTTPS://Notes.Example.COM:443/".into(), "fieldnotes.example.org".into()],
+            description: "Observations.".into(),
+            theme: "signal".into(),
+            created_at: 100,
+            updated_at: 100,
+        };
+        let site_b = BlogSite {
+            id: 2,
+            name: "Studio Journal".into(),
+            slug: "studio-journal".into(),
+            hosts: vec!["studio.example.com".into()],
+            description: "Workshop log.".into(),
+            theme: "phosphor".into(),
+            created_at: 101,
+            updated_at: 101,
+        };
+        db.upsert_blog_site(&site_a).unwrap();
+        db.upsert_blog_site(&site_b).unwrap();
+
+        // Host normalization & lookup
+        let found = db.get_blog_site_by_host("notes.example.com:8080").unwrap().unwrap();
+        assert_eq!(found.id, 1);
+        assert_eq!(db.get_blog_site_by_host("fieldnotes.example.org").unwrap().unwrap().id, 1);
+        assert_eq!(db.get_blog_site_by_host("studio.example.com").unwrap().unwrap().id, 2);
+
+        // Duplicate host on another site must fail
+        let conflict = BlogSite {
+            id: 3,
+            name: "Conflict".into(),
+            slug: "conflict".into(),
+            hosts: vec!["notes.example.com".into()],
+            description: String::new(),
+            theme: "ink".into(),
+            created_at: 102,
+            updated_at: 102,
+        };
+        assert!(db.upsert_blog_site(&conflict).is_err());
+
+        // Same post slug on two different sites succeeds!
+        db.upsert_blog_post_for_site(1, &sample_post(10, "welcome")).unwrap();
+        db.upsert_blog_post_for_site(2, &sample_post(11, "welcome")).unwrap();
+        assert_eq!(db.get_blog_post_by_site_and_slug(1, "welcome").unwrap().unwrap().id, 10);
+        assert_eq!(db.get_blog_post_by_site_and_slug(2, "welcome").unwrap().unwrap().id, 11);
+
+        // Duplicate slug within the same site fails!
+        assert!(db.upsert_blog_post_for_site(1, &sample_post(12, "welcome")).is_err());
+
+        // Per-site listing isolates posts
+        assert_eq!(db.latest_published_blog_posts_for_site(1, 10).unwrap().len(), 1);
+        assert_eq!(db.latest_published_blog_posts_for_site(2, 10).unwrap().len(), 1);
+        assert_eq!(db.latest_published_blog_posts_for_site(0, 10).unwrap().len(), 0);
+
+        // Deleting site_a removes its posts and frees its hosts
+        db.delete_blog_site(1).unwrap();
+        assert!(db.get_blog_site_by_host("notes.example.com").unwrap().is_none());
+        assert!(db.get_blog_post(10).unwrap().is_none());
+        assert!(db.get_blog_post(11).unwrap().is_some());
+
         cleanup(&path);
     }
 }

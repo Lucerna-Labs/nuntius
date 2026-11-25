@@ -207,6 +207,17 @@ async fn run_serve(cfg: CccConfig, port_override: Option<u16>) {
         );
     }
 
+    // Multi-domain / multi-subdomain blog routing: when a request arrives
+    // with a Host header matching a configured BlogSite, serve that blog at
+    // `/` and `/posts/:slug` without colliding with radio-engine's `/` route.
+    if manager
+        .find::<ccc_plugin_blog::StaticBlogPlugin>()
+        .is_some()
+    {
+        app = ccc_plugin_blog::apply_multisite_blog_layer(app, ctx.db.clone());
+        info!("Multi-domain blog host routing engaged");
+    }
+
     // Analytics is a global middleware: wrap the entire app once it's
     // assembled. Disabled => no recording, no overhead.
     if let Some(analytics) = manager.find::<ccc_plugin_analytics::CccPluginAnalyticsPlugin>() {

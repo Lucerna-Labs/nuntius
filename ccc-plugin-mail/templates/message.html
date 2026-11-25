@@ -1,0 +1,37 @@
+{% extends "_mail_layout.html" %}
+
+{% block title %}{{ subject }} — Mail — Nuntius{% endblock %}
+
+{% block content %}
+<header class="cms-page__header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:14px; flex-wrap:wrap;">
+  <div>
+    <p style="margin:0 0 8px;"><a href="/admin/mail?folder={{ folder }}">← Back to {{ folder }}</a></p>
+    <h1 style="margin:0;">{{ subject }}</h1>
+    <p class="cms-page__lede" style="margin-top:8px;">
+      <strong>From:</strong> {{ from }}<br>
+      <strong>To:</strong> {{ to }}<br>
+      <strong>Date:</strong> {{ date }}
+    </p>
+  </div>
+  <div style="display:flex; gap:8px;">
+    <a class="cms-btn cms-btn--primary" href="/admin/mail/compose?to={{ reply_to_encoded }}&amp;subject={{ reply_subject_encoded }}">Reply</a>
+  </div>
+</header>
+
+<article style="border:1px solid #2a3038; border-radius:10px; padding:20px; background:#141920; line-height:1.65; overflow-x:auto;">
+  {% if is_html %}
+    {{ body_html|safe }}
+  {% else %}
+    <pre style="white-space:pre-wrap; font-family:inherit; margin:0;">{{ body_text }}</pre>
+  {% endif %}
+</article>
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Security</h3>
+  <ul class="cms-rail__list">
+    <li>HTML email bodies are sanitized server-side before rendering.</li>
+  </ul>
+</div>
+{% endblock %}

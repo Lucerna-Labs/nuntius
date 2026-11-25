@@ -3,21 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Blog — {{ site_name }}</title>
-  <meta name="description" content="Latest posts from {{ site_name }}.">
+  <title>{% if standalone_site %}{{ site_name }}{% else %}Blog — {{ site_name }}{% endif %}</title>
+  <meta name="description" content="{{ site_description }}">
   <meta name="theme-color" content="#07090d">
-  <meta property="og:title" content="Blog — {{ site_name }}">
+  <meta property="og:title" content="{% if standalone_site %}{{ site_name }}{% else %}Blog — {{ site_name }}{% endif %}">
   <meta property="og:type" content="website">
-  <meta property="og:description" content="Latest posts from {{ site_name }}.">
+  <meta property="og:description" content="{{ site_description }}">
   <meta name="twitter:card" content="summary">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/assets/public.css">
   <style>
+    :root { --blog-accent: {{ accent_hex }}; }
     /* --- Blog index -------------------------------------------------------- */
-    .blog-head { padding: 40px 0 4px; max-width: 760px; }
+    .blog-head { padding: 40px 0 4px; max-width: 760px; border-top: 3px solid var(--blog-accent); margin-top: 18px; }
     .blog-head h1 { font-size: clamp(30px, 4.6vw, 44px); margin: 12px 0 0; }
+    .blog-head .blog-desc { margin: 12px 0 0; color: var(--ink-dim); font-size: 16px; line-height: 1.55; }
     .post-list { list-style: none; margin: 22px 0 0; padding: 0; max-width: 760px; }
     .post-list li { border-bottom: 1px solid var(--line); }
     .post-list a {
@@ -29,7 +31,7 @@
       color: var(--ink);
     }
     .post-list h2 { margin: 0; font-size: 19px; line-height: 1.35; transition: color 0.15s; }
-    .post-list a:hover h2 { color: var(--signal-hot); }
+    .post-list a:hover h2 { color: var(--blog-accent); }
     .post-list .when {
       font: 500 12px/1 var(--font-mono);
       letter-spacing: 0.06em;
@@ -45,19 +47,29 @@
 <body class="nuntius-public">
   <div class="pub-wrap">
     <header class="pub-top">
-      <a class="pub-brand" href="/">{{ site_name }}</a>
+      <a class="pub-brand" href="{{ home_href }}">{{ site_name }}</a>
+      {% if !standalone_site %}
       <nav class="pub-nav" aria-label="Site">
         <a href="/radio">Live radio</a>
         <a href="/podcasts">Podcasts</a>
         <a href="/videos">Video</a>
         <a href="/blog/" aria-current="page">Blog</a>
       </nav>
+      {% endif %}
     </header>
 
     <main>
       <div class="blog-head">
-        <span class="pub-kicker">From the station</span>
-        <h1>Blog</h1>
+        {% if standalone_site %}
+          <span class="pub-kicker">Publication</span>
+          <h1>{{ site_name }}</h1>
+          {% if !site_description.is_empty() %}
+            <p class="blog-desc">{{ site_description }}</p>
+          {% endif %}
+        {% else %}
+          <span class="pub-kicker">From the station</span>
+          <h1>Blog</h1>
+        {% endif %}
       </div>
       {% if posts.is_empty() %}
         <div class="pub-empty" style="max-width: 760px; margin-top: 22px;">No posts published yet.</div>
@@ -65,7 +77,7 @@
         <ul class="post-list">
           {% for p in posts %}
             <li>
-              <a href="/blog/{{ p.slug }}">
+              <a href="{{ post_base_href }}{{ p.slug }}">
                 <h2>{{ p.title }}</h2>
                 <span class="when">{{ p.published_human }}</span>
               </a>
@@ -77,7 +89,9 @@
 
     <footer class="pub-footer">
       <span>Powered by Nuntius</span>
-      <span><a href="/podcasts/feed.xml">Podcast RSS</a></span>
+      {% if !standalone_site %}
+        <span><a href="/podcasts/feed.xml">Podcast RSS</a></span>
+      {% endif %}
     </footer>
   </div>
 </body>

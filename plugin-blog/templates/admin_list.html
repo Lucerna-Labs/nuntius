@@ -1,21 +1,68 @@
 {% extends "_admin_layout.html" %}
 
-{% block title %}Posts — Blog — Nuntius{% endblock %}
+{% block title %}Blogs &amp; Posts — Nuntius{% endblock %}
 
 {% block content %}
-<header class="cms-page__header">
-  <h1>Posts</h1>
-  <p class="cms-page__lede">{{ posts.len() }} post(s) in your blog.</p>
-  <a class="cms-btn cms-btn--primary" href="/admin/blog/posts/new" style="display:inline-block; margin-top:8px;">New post</a>
+<header class="cms-page__header" style="display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap;">
+  <div>
+    <h1>Your blogs</h1>
+    <p class="cms-page__lede">{{ sites.len() }} blog site(s) · {{ total_posts }} total post(s).</p>
+  </div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+    <a class="cms-btn cms-btn--primary" href="/admin/blog/sites/new">+ Create blog</a>
+    <a class="cms-btn" href="/admin/blog/posts/new{% match active_site_id %}{% when Some with (sid) %}?site_id={{ sid }}{% when None %}{% endmatch %}">+ New post</a>
+  </div>
 </header>
 
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:16px; margin:18px 0 28px;">
+  {% for s in sites %}
+  <section style="border:1px solid #2a3038; border-top:4px solid {{ s.accent_hex }}; border-radius:10px; padding:16px; background:#141920;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+      <h2 style="margin:0; font-size:18px;">{{ s.name }}</h2>
+      {% if s.is_default %}
+        <span class="cms-badge">default</span>
+      {% endif %}
+    </div>
+    {% if !s.hosts_display.is_empty() %}
+      <div style="margin-top:6px; font:12px/1.4 monospace; color:#8ab4f8; word-break:break-all;">{{ s.hosts_display }}</div>
+    {% else %}
+      <div style="margin-top:6px; font:12px/1.4 monospace; color:#9aa4ad;">{{ s.public_path }}</div>
+    {% endif %}
+    {% if !s.description.is_empty() %}
+      <p style="margin:8px 0 0; font-size:13px; color:#9aa4ad;">{{ s.description }}</p>
+    {% endif %}
+    <div style="margin-top:10px; font-size:12px; color:#9aa4ad;">
+      {{ s.published_count }} published · {{ s.draft_count }} drafts
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+      <a class="cms-btn cms-btn--primary" href="/admin/blog/posts/new?site_id={{ s.id }}" style="font-size:12px; padding:6px 10px;">Write</a>
+      <a class="cms-btn" href="/admin/blog/posts?site_id={{ s.id }}" style="font-size:12px; padding:6px 10px;">Posts</a>
+      {% if !s.is_default %}
+        <a class="cms-btn" href="/admin/blog/sites/{{ s.id }}/edit" style="font-size:12px; padding:6px 10px;">Manage</a>
+      {% endif %}
+      <a class="cms-btn" href="{{ s.public_path }}" target="_blank" rel="noopener" style="font-size:12px; padding:6px 10px;">View ↗</a>
+    </div>
+  </section>
+  {% endfor %}
+</div>
+
+<div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+  <h2 style="margin:0;">{{ posts_heading }}</h2>
+  {% match active_site_id %}
+    {% when Some with (_) %}
+      <a class="cms-btn" href="/admin/blog/posts" style="font-size:12px; padding:6px 10px;">Show all blogs</a>
+    {% when None %}
+  {% endmatch %}
+</div>
+
 {% if posts.is_empty() %}
-  <p>No posts yet. Hit “New post” to write your first one.</p>
+  <p>No posts yet. Hit “+ New post” to write your first one.</p>
 {% else %}
 <table class="cms-table">
   <thead>
     <tr>
       <th>Title</th>
+      <th>Blog</th>
       <th>Slug</th>
       <th>Status</th>
       <th>Updated</th>
@@ -26,6 +73,7 @@
     {% for p in posts %}
     <tr>
       <td><a href="/admin/blog/posts/{{ p.id }}/edit">{{ p.title }}</a></td>
+      <td><a href="/admin/blog/posts?site_id={{ p.site_id }}">{{ p.site_name }}</a></td>
       <td><code>{{ p.slug }}</code></td>
       <td><span class="cms-badge cms-badge--{{ p.status_str }}">{{ p.status_str }}</span></td>
       <td>{{ p.updated_human }}</td>
@@ -44,11 +92,11 @@
 
 {% block right_rail %}
 <div class="cms-rail__card">
-  <h3>Tips</h3>
+  <h3>Multi-domain blogs</h3>
   <ul class="cms-rail__list">
-    <li>Drafts are private. They appear here but not on your public blog.</li>
-    <li>Slugs become the URL — e.g. <code>/blog/your-slug</code>.</li>
-    <li>Switch a post's status to <strong>Published</strong> when you're ready to share it.</li>
+    <li>Create as many blogs as you want — each can bind to its own domain or subdomain.</li>
+    <li>Slugs are isolated per blog, so different blogs can reuse the same post URLs.</li>
+    <li>Legacy posts remain on the default blog at <code>/blog/</code>.</li>
   </ul>
 </div>
 {% endblock %}

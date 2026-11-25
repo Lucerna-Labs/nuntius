@@ -1,0 +1,86 @@
+{% extends "_mail_layout.html" %}
+
+{% block title %}Inbox — Mail — Nuntius{% endblock %}
+
+{% block content %}
+<header class="cms-page__header" style="display:flex; justify-content:space-between; align-items:flex-end; gap:14px; flex-wrap:wrap;">
+  <div>
+    <h1>Mail — {{ folder }}</h1>
+    <p class="cms-page__lede">
+      {% if configured %}
+        Connected to <code>{{ account_label }}</code>
+      {% else %}
+        Connect any IMAP + SMTP mailbox to read and send email inside Nuntius.
+      {% endif %}
+    </p>
+  </div>
+  {% if configured %}
+  <div style="display:flex; gap:8px;">
+    <a class="cms-btn cms-btn--primary" href="/admin/mail/compose">+ Compose</a>
+    <a class="cms-btn" href="/admin/mail?folder={{ folder }}">Refresh</a>
+  </div>
+  {% endif %}
+</header>
+
+{% match flash %}
+  {% when Some with (msg) %}
+    <div class="cms-alert" style="margin-bottom:16px; border:1px solid #3ddbc4; padding:12px 14px; border-radius:8px; background:#0f2422;">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+{% match error %}
+  {% when Some with (msg) %}
+    <div class="cms-alert cms-alert--error" style="margin-bottom:16px;">{{ msg }}</div>
+  {% when None %}
+{% endmatch %}
+
+{% if !configured %}
+  <section style="border:1px solid #2a3038; border-radius:10px; padding:20px; background:#141920; max-width:720px;">
+    <h2 style="margin-top:0;">Configure IMAP + SMTP in <code>ccc.toml</code></h2>
+    <p>Add a <code>[plugin.mail]</code> section to <code>ccc.toml</code> (store the password in an environment variable for safety):</p>
+    <pre style="background:#0b0f14; padding:14px; border-radius:8px; overflow-x:auto; font-size:13px;">[plugin.mail]
+imap_host = "imap.ionos.com"
+imap_port = 993
+smtp_host = "smtp.ionos.com"
+smtp_port = 587
+username = "you@yourdomain.com"
+password_env = "NUNTIUS_MAIL_PASSWORD"
+from_name = "Lucerna Media"
+from_address = "you@yourdomain.com"</pre>
+    <p style="margin-bottom:0; color:#9aa4ad;">Works with IONOS Mail, Fastmail, Gmail (App Password), or any standard IMAP/SMTP provider.</p>
+  </section>
+{% else if messages.is_empty() %}
+  <p>No messages found in <code>{{ folder }}</code>.</p>
+{% else %}
+  <table class="cms-table">
+    <thead>
+      <tr>
+        <th>From</th>
+        <th>Subject</th>
+        <th>Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in messages %}
+      <tr {% if m.unread %}style="font-weight:700;"{% endif %}>
+        <td>{{ m.from }}</td>
+        <td><a href="/admin/mail/message/{{ m.uid }}?folder={{ folder }}">{{ m.subject }}</a></td>
+        <td style="white-space:nowrap;">{{ m.date }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+{% endblock %}
+
+{% block right_rail %}
+<div class="cms-rail__card">
+  <h3>Folders</h3>
+  <ul class="cms-rail__list">
+    <li><a href="/admin/mail?folder=INBOX">Inbox</a></li>
+    <li><a href="/admin/mail?folder=Sent">Sent</a></li>
+    <li><a href="/admin/mail?folder=Drafts">Drafts</a></li>
+    <li><a href="/admin/mail?folder=Trash">Trash</a></li>
+  </ul>
+</div>
+{% endblock %}

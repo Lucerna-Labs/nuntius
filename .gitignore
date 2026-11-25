@@ -16,6 +16,7 @@ seo.toml
 patreon.toml
 radio.toml
 /media/
+/web-apps/
 
 # Local logs from cargo runs we kept while bootstrapping
 cargo-check.log

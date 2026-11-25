@@ -109,7 +109,10 @@ pub async fn require_login(
 pub async fn security_headers(req: Request<Body>, next: Next) -> Response {
     let mut res = next.run(req).await;
     let headers = res.headers_mut();
-    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        HeaderValue::from_static("SAMEORIGIN"),
+    );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),

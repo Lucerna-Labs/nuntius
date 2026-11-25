@@ -14,15 +14,25 @@
 
 <form method="post" action="{{ form_action }}" class="cms-form" style="max-width:780px">
   <label class="cms-field">
+    <span class="cms-field__label">Blog</span>
+    <select class="cms-field__input" name="site_id">
+      {% for opt in site_options %}
+        <option value="{{ opt.id }}" {% if opt.id == selected_site_id %}selected{% endif %}>{{ opt.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label class="cms-field">
     <span class="cms-field__label">Title</span>
     <input class="cms-field__input" type="text" name="title" required value="{{ title }}" autofocus>
   </label>
 
   <label class="cms-field">
     <span class="cms-field__label">Slug</span>
-    <input class="cms-field__input" type="text" name="slug" required value="{{ slug }}"
-           pattern="[a-z0-9-]+" title="Lowercase letters, digits, and hyphens only.">
-    <span class="cms-field__hint">Will appear as <code>/blog/{{ slug_or_placeholder }}</code> when published.</span>
+    <input class="cms-field__input" type="text" name="slug" value="{{ slug }}"
+           pattern="[a-z0-9-]*" title="Lowercase letters, digits, and hyphens only."
+           placeholder="auto-generated from title if left blank">
+    <span class="cms-field__hint">URL fragment, e.g. <code>{{ slug_or_placeholder }}</code>. Unique within the selected blog.</span>
   </label>
 
   <label class="cms-field">

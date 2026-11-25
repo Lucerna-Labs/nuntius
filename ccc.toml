@@ -40,6 +40,10 @@ enabled = [
     # 24/7 stream.
     "live-chat",
     "stream-watch",
+    # ArtCraft web studio (WordCraft + PdfCraft) and IMAP/SMTP Mail
+    "wordcraft",
+    "pdfcraft",
+    "mail",
 ]
 
 # Per-plugin configuration goes under [plugin.<name>]. Plugins read the

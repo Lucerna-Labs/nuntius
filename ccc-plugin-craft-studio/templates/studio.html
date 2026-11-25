@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_name }} — Nuntius</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+  <style>
+    .craft-shell {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 36px);
+      gap: 10px;
+    }
+    .craft-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 6px 0;
+    }
+    .craft-bar h1 { margin: 0; font-size: 20px; }
+    .craft-bar__meta { color: #9aa4ad; font-size: 13px; }
+    .craft-frame {
+      flex: 1;
+      width: 100%;
+      min-height: 540px;
+      border: 1px solid #2a3038;
+      border-radius: 10px;
+      background: #0d1117;
+    }
+    .craft-empty {
+      border: 1px solid #2a3038;
+      border-radius: 10px;
+      padding: 24px;
+      background: #141920;
+      max-width: 720px;
+    }
+  </style>
+</head>
+<body class="cms">
+  <div class="cms-shell" style="grid-template-columns: 220px 1fr;">
+    <aside class="cms-shell__nav" aria-label="Primary navigation">
+      <div class="cms-brand">
+        <span class="cms-brand__mark">N</span>
+        <span class="cms-brand__name">Nuntius</span>
+      </div>
+      <nav class="cms-nav">
+        <a class="cms-nav__item" href="/admin/">Dashboard</a>
+        <a class="cms-nav__item" href="/admin/blog/posts">Blogs</a>
+        <a class="cms-nav__item {% if app_id == "wordcraft" %}cms-nav__item--active{% endif %}" href="/admin/wordcraft">WordCraft</a>
+        <a class="cms-nav__item {% if app_id == "pdfcraft" %}cms-nav__item--active{% endif %}" href="/admin/pdfcraft">PdfCraft</a>
+        <a class="cms-nav__item" href="/admin/mail">Mail</a>
+        <a class="cms-nav__item cms-nav__item--bottom" href="/admin/logout">Sign out</a>
+      </nav>
+    </aside>
+
+    <main class="cms-shell__main" id="main" style="padding: 18px 22px;">
+      <div class="craft-shell">
+        <div class="craft-bar">
+          <div>
+            <h1>{{ app_name }}</h1>
+            <div class="craft-bar__meta">{{ tagline }}</div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            {% if bundle_ready %}
+              <a class="cms-btn cms-btn--primary" href="{{ app_mount_url }}" target="_blank" rel="noopener">Open Fullscreen ↗</a>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if bundle_ready %}
+          <iframe class="craft-frame" src="{{ app_mount_url }}" title="{{ app_name }}" allow="clipboard-read; clipboard-write"></iframe>
+        {% else %}
+          <div class="craft-empty">
+            <h2>{{ app_name }} web bundle not installed yet</h2>
+            <p>Expected <code>index.html</code> inside <code>{{ bundle_dir_display }}</code>.</p>
+            <p>Download the official ArtCraft web release zip or run <code>scripts/fetch-craft-web.sh</code> on this host, then refresh this page.</p>
+          </div>
+        {% endif %}
+      </div>
+    </main>
+  </div>
+</body>
+</html>
