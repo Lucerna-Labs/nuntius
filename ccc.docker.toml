@@ -1,0 +1,56 @@
+# Nuntius (CCC) — Docker runtime configuration.
+# Uses default [server] (all interfaces, port 3000 inside container; mapped to 127.0.0.1:3400 on host).
+# Persistent data lives under /data (mounted from ./data on the host).
+
+[site]
+name = "Lucerna Media"
+
+[database]
+path = "/data/ccc.redb"
+
+[plugins]
+enabled = [
+    "cms",
+    "blog",
+    "podcast",
+    "video-podcast",
+    "radio-engine",
+    "activitypub",
+    "whisper",
+    "s3",
+    "newsletter",
+    "seo",
+    "analytics",
+    "bridge",
+    "ads",
+    "live-chat",
+    "stream-watch",
+    "wordcraft",
+    "pdfcraft",
+    "mail",
+]
+
+[plugin.cms]
+admin_store_path = "/data/admin.toml"
+disable_auth = false
+
+[plugin.podcast]
+audio_dir = "/data/media/podcast"
+members_token = "change-me"
+
+[plugin.video-podcast]
+hls_dir = "/data/media/video-hls"
+source_dir = "/data/media/video-source"
+ffmpeg = "ffmpeg"
+
+[plugin.activitypub]
+settings_path = "/data/federation.toml"
+
+[plugin.whisper]
+settings_path = "/data/whisper.toml"
+
+[plugin.wordcraft]
+bundle_dir = "/app/web-apps/wordcraft"
+
+[plugin.pdfcraft]
+bundle_dir = "/app/web-apps/pdfcraft"

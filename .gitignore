@@ -17,6 +17,7 @@ patreon.toml
 radio.toml
 /media/
 /web-apps/
+/data/
 
 # Local logs from cargo runs we kept while bootstrapping
 cargo-check.log

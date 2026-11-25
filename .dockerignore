@@ -1,0 +1,7 @@
+/target
+/data
+/.git
+*.redb
+admin.toml
+*.log
+*.zip

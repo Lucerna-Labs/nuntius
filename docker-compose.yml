@@ -1,0 +1,24 @@
+services:
+  nuntius:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nuntius-local
+    working_dir: /data
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:3400:3000"
+    volumes:
+      - ./data:/data
+      - ./web-apps:/app/web-apps:ro
+      - ./ccc.docker.toml:/app/ccc.docker.toml:ro
+    environment:
+      - RUST_LOG=info
+      - NUNTIUS_MAIL_PASSWORD=${NUNTIUS_MAIL_PASSWORD:-}
