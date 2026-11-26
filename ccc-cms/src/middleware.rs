@@ -124,6 +124,57 @@ pub async fn security_headers(req: Request<Body>, next: Next) -> Response {
     res
 }
 
+/// Inject the persistent left-side AI Command Dock assets into every HTML
+/// page under `/admin/*` (excluding auth pages, static assets, and embedded
+/// WordCraft/PdfCraft WASM iframe apps) so the AI Team stays available
+/// across all tabs and platforms automatically.
+pub async fn inject_agent_dock(req: Request<Body>, next: Next) -> Response {
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
+    let res = next.run(req).await;
+
+    if method != Method::GET {
+        return res;
+    }
+    let rel = path.strip_prefix("/admin").unwrap_or(&path);
+    if is_exempt(rel)
+        || rel.starts_with("/wordcraft/app")
+        || rel.starts_with("/pdfcraft/app")
+        || rel.starts_with("/api/")
+    {
+        return res;
+    }
+
+    let is_html = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.to_ascii_lowercase().contains("text/html"))
+        .unwrap_or(false);
+    if !is_html {
+        return res;
+    }
+
+    let (mut parts, body) = res.into_parts();
+    let bytes = match axum::body::to_bytes(body, 4 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return Response::from_parts(parts, Body::empty()),
+    };
+    let html = String::from_utf8_lossy(&bytes);
+    if html.contains("agent-dock.js") || !html.contains("</body>") {
+        return Response::from_parts(parts, Body::from(bytes));
+    }
+
+    let snippet = concat!(
+        "<link rel=\"stylesheet\" href=\"/admin/static/agent-dock.css\">",
+        "<script src=\"/admin/static/agent-dock.js\" defer></script>",
+        "</body>"
+    );
+    let injected = html.replacen("</body>", snippet, 1);
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, Body::from(injected))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

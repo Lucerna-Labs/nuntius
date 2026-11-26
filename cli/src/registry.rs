@@ -96,6 +96,9 @@ pub fn register_by_name(
             let plugin = ccc_plugin_mail::MailPlugin::from_config(cfg)?;
             manager.register(plugin)?;
         }
+        "agents" => {
+            manager.register(ccc_plugin_agents::AgentsPlugin::from_config(cfg))?;
+        }
         other => return Err(DispatchError::Unknown(other.to_string())),
     }
     Ok(())
@@ -126,6 +129,7 @@ pub fn known_plugins() -> &'static [&'static str] {
         "wordcraft",
         "pdfcraft",
         "mail",
+        "agents",
     ]
 }
 

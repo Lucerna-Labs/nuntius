@@ -44,6 +44,7 @@ enabled = [
     "wordcraft",
     "pdfcraft",
     "mail",
+    "agents",
 ]
 
 # Per-plugin configuration goes under [plugin.<name>]. Plugins read the

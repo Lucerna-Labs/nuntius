@@ -21,7 +21,8 @@ use tower_http::services::ServeDir;
 
 use crate::auth::AdminStore;
 use crate::middleware::{
-    require_login, security_headers, session_is_valid, session_value, SESSION_COOKIE,
+    inject_agent_dock, require_login, security_headers, session_is_valid, session_value,
+    SESSION_COOKIE,
 };
 use crate::templates::{DashboardPage, LoginPage, SetupPage};
 
@@ -70,6 +71,7 @@ pub fn build_admin_tree(ctx: DashboardCtx, plugin_admin: Router) -> Router {
         .with_state(ctx)
         .merge(plugin_admin)
         .nest_service("/static", ServeDir::new(static_dir))
+        .layer(axum::middleware::from_fn(inject_agent_dock))
         .layer(axum::middleware::from_fn_with_state(
             store.clone(),
             require_login,

@@ -1,0 +1,233 @@
+/* Persistent left-side AI Command Dock across all Nuntius /admin/* tabs */
+body.nuntius-dock-open {
+  padding-left: 292px !important;
+  transition: padding-left 0.16s ease;
+}
+body.nuntius-dock-collapsed {
+  padding-left: 38px !important;
+  transition: padding-left 0.16s ease;
+}
+
+#nuntius-agent-dock {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 292px;
+  z-index: 9999;
+  background: #0c1017;
+  border-right: 1px solid #26303d;
+  color: #e6edf3;
+  font: 13px/1.45 Inter, system-ui, -apple-system, sans-serif;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+}
+
+#nuntius-agent-dock.is-collapsed {
+  width: 38px;
+}
+#nuntius-agent-dock.is-collapsed .ndock__body,
+#nuntius-agent-dock.is-collapsed .ndock__head-title,
+#nuntius-agent-dock.is-collapsed .ndock__manage {
+  display: none;
+}
+
+.ndock__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 10px 10px;
+  border-bottom: 1px solid #222b37;
+  background: #101620;
+}
+.ndock__head-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+.ndock__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3ddbc4;
+  display: inline-block;
+}
+.ndock__icon-btn {
+  background: transparent;
+  border: 1px solid #2a3442;
+  color: #c9d4df;
+  border-radius: 6px;
+  padding: 3px 7px;
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: none;
+}
+.ndock__icon-btn:hover {
+  border-color: #5b9eff;
+  color: #fff;
+}
+
+.ndock__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.ndock__controls {
+  padding: 8px 10px;
+  border-bottom: 1px solid #1e2631;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ndock__select {
+  width: 100%;
+  background: #141b25;
+  color: #e6edf3;
+  border: 1px solid #2a3442;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12.5px;
+}
+.ndock__ctx {
+  font: 11px/1.3 ui-monospace, monospace;
+  color: #8b98a8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ndock__feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.ndock__empty {
+  color: #8b98a8;
+  font-size: 12px;
+  padding: 8px 2px;
+}
+.ndock__msg {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  word-wrap: break-word;
+}
+.ndock__msg--user {
+  background: #1b3152;
+  border: 1px solid #30558a;
+  align-self: flex-end;
+  max-width: 92%;
+}
+.ndock__msg--assistant {
+  background: #141b24;
+  border: 1px solid #242e3b;
+  align-self: flex-start;
+  max-width: 96%;
+}
+.ndock__msg-meta {
+  font-size: 10.5px;
+  color: #8b98a8;
+  margin-bottom: 4px;
+}
+.ndock__msg p { margin: 0 0 6px; }
+.ndock__msg p:last-child { margin-bottom: 0; }
+.ndock__msg code {
+  background: #0a0e14;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+.ndock__proposals {
+  padding: 0 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ndock__prop {
+  border: 1px solid #f5a524;
+  background: #1f190e;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 12px;
+}
+.ndock__prop-kicker {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #f5a524;
+  font-weight: 700;
+}
+.ndock__prop-title {
+  font-weight: 700;
+  margin: 4px 0 2px;
+}
+.ndock__prop-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ndock__form {
+  padding: 8px 10px 10px;
+  border-top: 1px solid #222b37;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #0f141d;
+}
+.ndock__input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #141b25;
+  color: #e6edf3;
+  border: 1px solid #2a3442;
+  border-radius: 6px;
+  padding: 7px 8px;
+  font: inherit;
+  resize: none;
+  min-height: 46px;
+}
+.ndock__form-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+.ndock__btn {
+  background: #5b9eff;
+  color: #0b0f14;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 11px;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ndock__btn:hover { background: #7fb3ff; }
+.ndock__btn--ghost {
+  background: transparent;
+  color: #9aa4ad;
+  border: 1px solid #2a3442;
+  font-weight: 500;
+}
+.ndock__btn--ghost:hover {
+  background: #17202c;
+  color: #fff;
+}
+.ndock__btn--danger {
+  background: transparent;
+  color: #f87171;
+  border: 1px solid #5c2626;
+}

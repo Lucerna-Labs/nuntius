@@ -30,6 +30,7 @@ members = [
     "ccc-plugin-whisper",
     "ccc-plugin-craft-studio",
     "ccc-plugin-mail",
+    "ccc-plugin-agents",
 ]
 
 resolver = "2"

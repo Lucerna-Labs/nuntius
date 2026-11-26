@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ heading }} — Agents — Nuntius</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+</head>
+<body class="cms">
+  <div class="cms-shell">
+    <aside class="cms-shell__nav" aria-label="Primary navigation">
+      <div class="cms-brand">
+        <span class="cms-brand__mark">N</span>
+        <span class="cms-brand__name">Nuntius</span>
+      </div>
+      <nav class="cms-nav">
+        <a class="cms-nav__item" href="/admin/">Dashboard</a>
+        <a class="cms-nav__item" href="/admin/blog/posts">Blogs</a>
+        <a class="cms-nav__item" href="/admin/wordcraft">WordCraft</a>
+        <a class="cms-nav__item" href="/admin/pdfcraft">PdfCraft</a>
+        <a class="cms-nav__item" href="/admin/mail">Mail</a>
+        <a class="cms-nav__item cms-nav__item--active" href="/admin/agents">Agents</a>
+        <a class="cms-nav__item cms-nav__item--bottom" href="/admin/logout">Sign out</a>
+      </nav>
+    </aside>
+
+    <main class="cms-shell__main" id="main">
+      <header class="cms-page__header">
+        <p style="margin:0 0 8px;"><a href="/admin/agents">← Back to AI Team</a></p>
+        <h1>{{ heading }}</h1>
+      </header>
+
+      <form method="post" action="{{ form_action }}" class="cms-form" style="max-width:720px;">
+        <label class="cms-field">
+          <span class="cms-field__label">Bot name</span>
+          <input class="cms-field__input" type="text" name="name" required value="{{ name }}" placeholder="e.g. Editorial Director" autofocus>
+        </label>
+
+        <label class="cms-field">
+          <span class="cms-field__label">Role</span>
+          <input class="cms-field__input" type="text" name="role" value="{{ role }}" placeholder="e.g. Long-form writer & editor">
+        </label>
+
+        <label class="cms-field">
+          <span class="cms-field__label">Provider label</span>
+          <input class="cms-field__input" type="text" name="provider" required value="{{ provider }}" placeholder="e.g. api">
+        </label>
+
+        <label class="cms-field">
+          <span class="cms-field__label">Model ID</span>
+          <input class="cms-field__input" type="text" name="model" required value="{{ model }}" placeholder="e.g. your-api-model-id">
+        </label>
+
+        <label class="cms-field">
+          <span class="cms-field__label">API Key Env Var Name</span>
+          <input class="cms-field__input" type="text" name="api_key_env" value="{{ api_key_env }}" placeholder="e.g. NUNTIUS_LLM_API_KEY">
+        </label>
+
+        <label class="cms-field">
+          <span class="cms-field__label">Default Target Blog (for proposed drafts)</span>
+          <select class="cms-field__input" name="default_blog_site_id">
+            {% for opt in site_options %}
+              <option value="{{ opt.id }}" {% if opt.id == default_blog_site_id %}selected{% endif %}>{{ opt.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label class="cms-field">
+          <span class="cms-field__label">System Prompt / Personality</span>
+          <textarea class="cms-field__input" name="system_prompt" rows="7">{{ system_prompt }}</textarea>
+        </label>
+
+        <div style="display:flex; gap:8px;">
+          <button class="cms-btn cms-btn--primary" type="submit">Save bot</button>
+          <a class="cms-btn" href="/admin/agents" style="display:inline-flex; align-items:center; padding:10px 16px;">Cancel</a>
+        </div>
+      </form>
+
+      {% match delete_action %}
+        {% when Some with (del_url) %}
+          <form method="post" action="{{ del_url }}" style="margin-top:24px; max-width:720px; padding-top:16px; border-top:1px solid #2a3038;"
+                onsubmit="return confirm('Delete bot “{{ name }}” and its chat history?')">
+            <button class="cms-btn cms-btn--danger" type="submit">Delete bot</button>
+          </form>
+        {% when None %}
+      {% endmatch %}
+    </main>
+
+    <aside class="cms-shell__rail" id="right-rail">
+      <div class="cms-rail__card">
+        <h3>Pluggable API Backend</h3>
+        <ul class="cms-rail__list">
+          <li>API keys stay in environment variables (never stored in git).</li>
+          <li>Implement <code>AssistantProvider</code> in <code>ccc-plugin-agents/src/provider.rs</code> to connect your external model API.</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>

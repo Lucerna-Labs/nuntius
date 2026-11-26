@@ -28,6 +28,7 @@ enabled = [
     "wordcraft",
     "pdfcraft",
     "mail",
+    "agents",
 ]
 
 [plugin.cms]

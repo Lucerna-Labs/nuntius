@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Team — Nuntius</title>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+</head>
+<body class="cms">
+  <div class="cms-shell">
+    <aside class="cms-shell__nav" aria-label="Primary navigation">
+      <div class="cms-brand">
+        <span class="cms-brand__mark">N</span>
+        <span class="cms-brand__name">Nuntius</span>
+      </div>
+      <nav class="cms-nav">
+        <a class="cms-nav__item" href="/admin/">Dashboard</a>
+        <a class="cms-nav__item" href="/admin/blog/posts">Blogs</a>
+        <a class="cms-nav__item" href="/admin/wordcraft">WordCraft</a>
+        <a class="cms-nav__item" href="/admin/pdfcraft">PdfCraft</a>
+        <a class="cms-nav__item" href="/admin/mail">Mail</a>
+        <a class="cms-nav__item cms-nav__item--active" href="/admin/agents">Agents</a>
+        <a class="cms-nav__item cms-nav__item--bottom" href="/admin/logout">Sign out</a>
+      </nav>
+    </aside>
+
+    <main class="cms-shell__main" id="main">
+      <header class="cms-page__header" style="display:flex; justify-content:space-between; align-items:flex-end; gap:14px; flex-wrap:wrap;">
+        <div>
+          <h1>AI Team</h1>
+          <p class="cms-page__lede">Manage your bot contacts. Chat with them anytime from the persistent left-side AI Command Dock on every tab.</p>
+        </div>
+        <a class="cms-btn cms-btn--primary" href="/admin/agents/new">+ New Bot</a>
+      </header>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:16px; margin-top:18px;">
+        {% for b in bots %}
+        <section style="border:1px solid #2a3038; border-top:4px solid #5b9eff; border-radius:10px; padding:16px; background:#141920;">
+          <h2 style="margin:0; font-size:18px;">{{ b.name }}</h2>
+          <p style="margin:6px 0 0; font-size:13px; color:#9aa4ad;">{{ b.role }}</p>
+          <div style="margin-top:8px; font:12px/1.4 monospace; color:#8ab4f8;">{{ b.provider }} · {{ b.model }}</div>
+          <div style="display:flex; gap:8px; margin-top:14px;">
+            <a class="cms-btn cms-btn--primary" href="/admin/agents/{{ b.id }}/edit" style="font-size:12px; padding:6px 10px;">Configure</a>
+          </div>
+        </section>
+        {% endfor %}
+      </div>
+    </main>
+
+    <aside class="cms-shell__rail" id="right-rail">
+      <div class="cms-rail__card">
+        <h3>Always-On Left Dock</h3>
+        <ul class="cms-rail__list">
+          <li>The AI Command Dock stays pinned on the left side across Dashboard, Blogs, WordCraft, PdfCraft, Mail, and every other admin tab.</li>
+          <li>Try <code>status</code>, <code>blogs</code>, or <code>draft My Title | Body text</code> right in the dock.</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>

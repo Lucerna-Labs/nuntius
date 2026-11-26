@@ -38,6 +38,16 @@ const BLOG_POST_SITE_MAP: TableDefinition<u64, u64> = TableDefinition::new("blog
 const BLOG_POST_SITE_SLUG_INDEX: TableDefinition<(u64, &str), u64> =
     TableDefinition::new("blog_post_site_slug");
 
+/// AI Team bots (Agents plugin).
+const AGENT_BOTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("agent_bots");
+
+/// Chat messages per bot: Key = (bot_id, message_id), Value = JSON `AgentMessage`.
+const AGENT_MESSAGES_TABLE: TableDefinition<(u64, u64), &[u8]> =
+    TableDefinition::new("agent_messages");
+
+/// Pending / resolved bot action proposals (Approve-what-matters queue).
+const AGENT_PROPOSALS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("agent_proposals");
+
 /// Transcription jobs (Whisper plugin).
 /// Key: Job ID (u64 == unix-second creation time)
 /// Value: Serialized `TranscriptionJob`
@@ -183,6 +193,73 @@ pub struct BlogSite {
     pub theme: String,
     pub created_at: u64,
     pub updated_at: u64,
+}
+
+/// An AI bot contact inside Nuntius Creator Command Center.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AgentBot {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    /// Provider label configured by the operator (e.g. `"api"`, `"custom"`).
+    pub provider: String,
+    /// Model identifier configured by the operator.
+    pub model: String,
+    /// Optional env var name holding the operator's API key.
+    #[serde(default)]
+    pub api_key_env: String,
+    /// Default target blog `site_id` when this bot drafts blog posts (0 = default blog).
+    #[serde(default)]
+    pub default_blog_site_id: u64,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// A persisted chat message in a bot's conversation thread.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AgentMessage {
+    pub id: u64,
+    pub bot_id: u64,
+    /// `"user"` or `"assistant"`
+    pub role: String,
+    pub content: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProposalStatus {
+    #[default]
+    Pending,
+    Approved,
+    Rejected,
+}
+
+impl ProposalStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProposalStatus::Pending => "pending",
+            ProposalStatus::Approved => "approved",
+            ProposalStatus::Rejected => "rejected",
+        }
+    }
+}
+
+/// A proposed Nuntius write action waiting for operator approval.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AgentProposal {
+    pub id: u64,
+    pub bot_id: u64,
+    /// Currently `"draft_blog_post"`.
+    pub kind: String,
+    pub site_id: u64,
+    pub title: String,
+    pub slug: String,
+    pub content: String,
+    pub status: ProposalStatus,
+    pub created_at: u64,
 }
 
 /// Publication state of a blog post.
@@ -510,6 +587,9 @@ impl CccDB {
             write_txn.open_table(BLOG_SITE_HOST_INDEX)?;
             write_txn.open_table(BLOG_POST_SITE_MAP)?;
             write_txn.open_table(BLOG_POST_SITE_SLUG_INDEX)?;
+            write_txn.open_table(AGENT_BOTS_TABLE)?;
+            write_txn.open_table(AGENT_MESSAGES_TABLE)?;
+            write_txn.open_table(AGENT_PROPOSALS_TABLE)?;
             write_txn.open_table(TRANSCRIPTION_JOBS_TABLE)?;
             write_txn.open_table(NEWSLETTER_SUBSCRIBERS_TABLE)?;
             write_txn.open_table(NEWSLETTER_EMAIL_INDEX)?;
@@ -942,6 +1022,164 @@ impl CccDB {
         }
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(out)
+    }
+
+    // --- AGENT BOTS, MESSAGES & PROPOSALS ---
+
+    pub fn upsert_agent_bot(&self, bot: &AgentBot) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(AGENT_BOTS_TABLE)?;
+            let encoded = encode_json(bot)?;
+            table.insert(bot.id, encoded.as_slice())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn get_agent_bot(&self, id: u64) -> Result<Option<AgentBot>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(AGENT_BOTS_TABLE)?;
+        table
+            .get(id)?
+            .map(|raw| decode_json(raw.value()))
+            .transpose()
+    }
+
+    pub fn all_agent_bots(&self) -> Result<Vec<AgentBot>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(AGENT_BOTS_TABLE)?;
+        let mut out: Vec<AgentBot> = table
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| decode_json(v.value()))
+            .collect::<Result<Vec<_>, _>>()?;
+        out.sort_by_key(|b| b.id);
+        Ok(out)
+    }
+
+    pub fn delete_agent_bot(&self, id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut bots = write_txn.open_table(AGENT_BOTS_TABLE)?;
+            bots.remove(id)?;
+
+            let mut msgs = write_txn.open_table(AGENT_MESSAGES_TABLE)?;
+            let msg_keys: Vec<(u64, u64)> = msgs
+                .range((id, 0u64)..=(id, u64::MAX))?
+                .filter_map(|r| r.ok())
+                .map(|(k, _)| k.value())
+                .collect();
+            for k in msg_keys {
+                msgs.remove(k)?;
+            }
+
+            let mut props = write_txn.open_table(AGENT_PROPOSALS_TABLE)?;
+            let prop_ids: Vec<u64> = props
+                .iter()?
+                .filter_map(|r| r.ok())
+                .filter_map(|(k, v)| {
+                    decode_json::<AgentProposal>(v.value())
+                        .ok()
+                        .filter(|p| p.bot_id == id)
+                        .map(|_| k.value())
+                })
+                .collect();
+            for pid in prop_ids {
+                props.remove(pid)?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn append_agent_message(&self, msg: &AgentMessage) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut msgs = write_txn.open_table(AGENT_MESSAGES_TABLE)?;
+            let encoded = encode_json(msg)?;
+            msgs.insert((msg.bot_id, msg.id), encoded.as_slice())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn agent_messages_for_bot(&self, bot_id: u64) -> Result<Vec<AgentMessage>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let msgs = read_txn.open_table(AGENT_MESSAGES_TABLE)?;
+        let mut out = Vec::new();
+        for item in msgs.range((bot_id, 0u64)..=(bot_id, u64::MAX))? {
+            let (_, v) = item?;
+            out.push(decode_json(v.value())?);
+        }
+        Ok(out)
+    }
+
+    pub fn clear_agent_messages(&self, bot_id: u64) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut msgs = write_txn.open_table(AGENT_MESSAGES_TABLE)?;
+            let keys: Vec<(u64, u64)> = msgs
+                .range((bot_id, 0u64)..=(bot_id, u64::MAX))?
+                .filter_map(|r| r.ok())
+                .map(|(k, _)| k.value())
+                .collect();
+            for k in keys {
+                msgs.remove(k)?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn upsert_agent_proposal(&self, prop: &AgentProposal) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut props = write_txn.open_table(AGENT_PROPOSALS_TABLE)?;
+            let encoded = encode_json(prop)?;
+            props.insert(prop.id, encoded.as_slice())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn get_agent_proposal(&self, id: u64) -> Result<Option<AgentProposal>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let props = read_txn.open_table(AGENT_PROPOSALS_TABLE)?;
+        props
+            .get(id)?
+            .map(|raw| decode_json(raw.value()))
+            .transpose()
+    }
+
+    pub fn agent_proposals_for_bot(&self, bot_id: u64) -> Result<Vec<AgentProposal>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let props = read_txn.open_table(AGENT_PROPOSALS_TABLE)?;
+        let mut out: Vec<AgentProposal> = props
+            .iter()?
+            .filter_map(|r| r.ok())
+            .map(|(_, v)| decode_json::<AgentProposal>(v.value()))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|p| p.bot_id == bot_id)
+            .collect();
+        out.sort_by(|a, b| b.id.cmp(&a.id));
+        Ok(out)
+    }
+
+    pub fn pending_agent_proposals_count(&self) -> Result<usize, Error> {
+        let read_txn = self.db.begin_read()?;
+        let props = read_txn.open_table(AGENT_PROPOSALS_TABLE)?;
+        let mut count = 0usize;
+        for item in props.iter()? {
+            let (_, v) = item?;
+            if let Ok(p) = decode_json::<AgentProposal>(v.value()) {
+                if p.status == ProposalStatus::Pending {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
     }
 
     // --- PODCASTS ---

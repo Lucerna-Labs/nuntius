@@ -34,3 +34,4 @@ ccc-plugin-theme-dark-matter = { path = "../ccc-plugin-theme-dark-matter" }
 ccc-plugin-whisper = { path = "../ccc-plugin-whisper" }
 ccc-plugin-craft-studio = { path = "../ccc-plugin-craft-studio" }
 ccc-plugin-mail = { path = "../ccc-plugin-mail" }
+ccc-plugin-agents = { path = "../ccc-plugin-agents" }
